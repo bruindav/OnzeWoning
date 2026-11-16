@@ -1,4 +1,4 @@
-// app.js — fix-1
+// app.js — fix-2
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-1';
+const VERSIE = 'fix-2';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
