@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- index.html — fix-1 -->
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://www.gstatic.com https://apis.google.com; connect-src 'self' https://*.googleapis.com https://www.gstatic.com https://apis.google.com; img-src 'self' data: blob:; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; frame-src https://*.firebaseapp.com https://*.web.app https://accounts.google.com; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta name="theme-color" content="#1F5F55">
+  <meta name="description" content="Onze Woning — hoe alles in huis werkt, onderhoud en papieren op één plek.">
+  <title>Onze Woning</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div id="app" class="app">
+    <p class="laden">Laden…</p>
+  </div>
+  <div id="meldingen" class="meldingen" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

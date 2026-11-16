@@ -1,0 +1,17 @@
+{
+  "_versie": "fix-1",
+  "name": "Onze Woning",
+  "short_name": "Onze Woning",
+  "description": "Hoe alles in huis werkt, onderhoud en papieren op één plek.",
+  "lang": "nl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F7F5F0",
+  "theme_color": "#1F5F55",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ]
+}

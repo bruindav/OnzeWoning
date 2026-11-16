@@ -1,0 +1,38 @@
+// firestore.rules — fix-1
+// Alleen "leden" (jij en je partner) mogen lezen en schrijven.
+// Een lid voeg je toe in de Firebase-console: collectie "leden", document-ID = de gebruikers-ID
+// die de app toont na de eerste keer inloggen. Inhoud mag bijv. { naam: "Dave" } zijn.
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isLid() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/leden/$(request.auth.uid));
+    }
+
+    // Je mag alleen je eigen lid-document lezen (om te zien of je toegang hebt).
+    // Leden toevoegen of weghalen kan alleen via de Firebase-console.
+    match /leden/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Foto's: klein (verkleinde JPEG, als tekst opgeslagen, max ~900 kB per foto)
+    match /fotos/{id} {
+      allow read, delete: if isLid();
+      allow create, update: if isLid()
+        && request.resource.data.mime == 'image/jpeg'
+        && request.resource.data.data is string
+        && request.resource.data.data.size() < 900000;
+    }
+
+    // De gegevens van het huis
+    match /{coll}/{id} {
+      allow read, write: if isLid()
+        && coll in ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren', 'instellingen'];
+    }
+
+    // Alles daarbuiten: dicht
+  }
+}
