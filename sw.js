@@ -1,7 +1,7 @@
-// sw.js — fix-2
+// sw.js — fix-3
 // Zorgt dat de app ook zonder internet opent. Eigen bestanden: eerst netwerk (altijd de nieuwste versie),
 // bij geen verbinding uit de cache. Firebase-bibliotheken: uit de cache (veranderen niet per versie).
-const CACHE = 'onzewoning-fix-2';
+const CACHE = 'onzewoning-fix-3';
 const SCHIL = ['./', './index.html', './app.css', './app.js', './firebase.js', './config.js', './manifest.webmanifest', './icon.svg', './icon-192.png'];
 
 self.addEventListener('install', (e) => {

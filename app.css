@@ -1,4 +1,4 @@
-/* app.css — fix-1 */
+/* app.css — fix-3 */
 :root {
   --grond: #F7F5F0;
   --kaart: #FFFFFF;
@@ -246,3 +246,11 @@ textarea.invoer { min-height: 84px; resize: vertical; line-height: 1.45; }
 .melding-fout { background: #7A2410; }
 
 .versie { text-align: center; font-size: 12px; color: var(--zacht); padding: 8px 0 0; }
+
+/* Volgorde aanpassen (fix-3) */
+.sorteer { user-select: none; -webkit-user-select: none; }
+.sorteer-rij { display: flex; align-items: center; gap: 2px; padding: 6px 4px 6px 0; transition: box-shadow 0.15s; }
+.sorteer-rij.sleept { border-color: var(--accent); box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16); background: #FFFEFB; }
+.greep { flex: none; width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; color: var(--zacht); cursor: grab; touch-action: none; }
+.sorteer-rij.sleept .greep { cursor: grabbing; color: var(--accent); }
+.volgorde-modus { padding: 12px; border-radius: 16px; background: var(--accent-licht); }

@@ -1,4 +1,4 @@
-// app.js — fix-2
+// app.js — fix-3 (volgorde van kaartjes aanpassen)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-2';
+const VERSIE = 'fix-3';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
@@ -45,7 +45,9 @@ const ICONS = {
   prullenbak: '<path d="M4 7h16M9 7V4h6v3M6 7l1 14h10l1-14"/>',
   uit: '<path d="M15 4h4v16h-4"/><path d="M10 8l-4 4 4 4M6 12h10"/>',
   persoon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/>',
-  rechts: '<path d="M9 5l7 7-7 7"/>'
+  rechts: '<path d="M9 5l7 7-7 7"/>',
+  greep: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
+  schuif: '<path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4"/>'
 };
 function ico(naam, maat = 22) {
   const s = document.createElement('span');
@@ -156,9 +158,11 @@ function taakStatus(t) {
 const ruimteVan = (id) => D.ruimtes.find((r) => r.id === id);
 const itemVan = (id) => D.items.find((i) => i.id === id);
 const ruimteNaam = (id) => (ruimteVan(id) || {}).naam || 'Zonder ruimte';
-const itemsIn = (rid) => D.items.filter((i) => i.ruimteId === rid).sort(opNaam);
+const opVolgorde = (a, b) => (a.volgorde ?? 1e9) - (b.volgorde ?? 1e9) || opNaam(a, b);
+const itemsIn = (rid) => D.items.filter((i) => i.ruimteId === rid).sort(opVolgorde);
+const volgendNummer = (lijst) => lijst.reduce((m, x) => Math.max(m, Number(x.volgorde) || 0), 0) + 1;
 const takenVan = (iid) => D.onderhoud.filter((t) => t.itemId === iid);
-const gesorteerdeRuimtes = () => [...D.ruimtes].sort((a, b) => (a.volgorde ?? 999) - (b.volgorde ?? 999) || opNaam(a, b));
+const gesorteerdeRuimtes = () => [...D.ruimtes].sort(opVolgorde);
 function voornaam() {
   if (opslag && opslag.soort === 'demo') return 'daar';
   const n = (gebruiker && (gebruiker.displayName || gebruiker.email)) || '';
@@ -542,7 +546,7 @@ function bouwShell() {
   vervang(appEl,
     opslag.soort === 'demo' ? el('div', { class: 'demo-band' }, 'Demo: voorbeeldgegevens, alleen op dit apparaat') : null,
     view, nav);
-  window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
+  window.addEventListener('hashchange', () => { volgorde = null; render(); window.scrollTo(0, 0); });
   render();
 }
 
@@ -596,6 +600,80 @@ function terugbalk(href, label, rechts) {
     rechts || null);
 }
 
+/* ---------- Volgorde aanpassen (fix-3) ----------
+   Alleen voor leden: gasten krijgen in de volgende fase een eigen alleen-lezen scherm zonder deze knoppen. */
+let volgorde = null; // { sleutel, lijst: [{ id, label, sub }] }
+const inVolgorde = (sleutel) => !!volgorde && volgorde.sleutel === sleutel;
+
+function volgordeKnop(sleutel, maakLijst) {
+  return el('button', {
+    type: 'button', class: 'knop knop-tekst knop-klein',
+    onclick: () => { volgorde = { sleutel, lijst: maakLijst() }; render(); }
+  }, ico('schuif', 18), 'Volgorde');
+}
+
+function volgordeEditor(titel, bewaar) {
+  const lijst = volgorde.lijst;
+  const ul = el('ul', { class: 'lijst sorteer', 'aria-label': titel });
+  let sleeptId = null;
+  const wissel = (a, b) => { [lijst[a], lijst[b]] = [lijst[b], lijst[a]]; };
+  // Focus blijft op het verplaatste kaartje (of op de andere pijl als deze nu uit staat)
+  function focusOp(sleutel) {
+    const ander = sleutel.startsWith('op-') ? sleutel.replace(/^op-/, 'neer-') : sleutel.replace(/^neer-/, 'op-');
+    const k = ul.querySelector(`[data-k="${sleutel}"]`);
+    const k2 = ul.querySelector(`[data-k="${ander}"]`);
+    if (k && !k.disabled) k.focus(); else if (k2) k2.focus();
+  }
+  function teken() {
+    vervang(ul, lijst.map((x, n) => el('li', { class: `kaart sorteer-rij${x.id === sleeptId ? ' sleept' : ''}`, 'data-idx': n },
+      el('span', { class: 'greep', title: 'Slepen', 'aria-hidden': 'true', onpointerdown: (e) => startSlepen(e, x.id) }, ico('greep', 22)),
+      el('span', { class: 'lijst-tekst' }, el('span', { class: 'lijst-titel' }, x.label), x.sub ? el('span', { class: 'lijst-sub' }, x.sub) : null),
+      el('button', { type: 'button', class: 'icoonknop', 'data-k': `op-${x.id}`, 'aria-label': `${x.label} omhoog`, disabled: n === 0, onclick: () => { wissel(n, n - 1); teken(); focusOp(`op-${x.id}`); } }, ico('omhoog')),
+      el('button', { type: 'button', class: 'icoonknop', 'data-k': `neer-${x.id}`, 'aria-label': `${x.label} omlaag`, disabled: n === lijst.length - 1, onclick: () => { wissel(n, n + 1); teken(); focusOp(`neer-${x.id}`); } }, ico('omlaag')))));
+  }
+  function startSlepen(e, id) {
+    e.preventDefault();
+    sleeptId = id;
+    try { ul.setPointerCapture(e.pointerId); } catch { /* oudere browser */ }
+    teken();
+  }
+  ul.addEventListener('pointermove', (e) => {
+    if (!sleeptId) return;
+    if (e.clientY < 90) window.scrollBy(0, -14);
+    else if (e.clientY > window.innerHeight - 130) window.scrollBy(0, 14);
+    const onder = document.elementFromPoint(e.clientX, e.clientY);
+    const rij = onder && onder.closest('.sorteer-rij');
+    if (!rij || !ul.contains(rij)) return;
+    const doel = Number(rij.dataset.idx);
+    const van = lijst.findIndex((x) => x.id === sleeptId);
+    if (doel !== van && van >= 0) { const [x] = lijst.splice(van, 1); lijst.splice(doel, 0, x); teken(); }
+  });
+  const stop = () => { if (!sleeptId) return; sleeptId = null; teken(); };
+  ul.addEventListener('pointerup', stop);
+  ul.addEventListener('pointercancel', stop);
+  teken();
+  return el('section', { class: 'stapel volgorde-modus', 'aria-label': titel },
+    el('p', { class: 'veld-hint' }, 'Sleep aan ⋮⋮ of gebruik de pijltjes. Tik daarna op Gereed.'),
+    ul,
+    el('div', { class: 'knoppen-2' },
+      el('button', { type: 'button', class: 'knop knop-rand', onclick: () => { volgorde = null; render(); } }, 'Annuleren'),
+      el('button', { type: 'button', class: 'knop knop-primair', onclick: () => { bewaar(lijst.map((x) => x.id)); volgorde = null; render(); melding('Volgorde bewaard'); } }, ico('vink', 18), 'Gereed')));
+}
+
+function bewaarVolgorde(coll, ids) {
+  ids.forEach((id, n) => {
+    const x = D[coll].find((y) => y.id === id);
+    if (x && x.volgorde !== n + 1) opslag.update(coll, id, { volgorde: n + 1 });
+  });
+}
+
+function bewaarNoodVolgorde(veld, ids) {
+  const n = D.nood || {};
+  const oud = n[veld] || [];
+  const nieuw = ids.map((id) => oud[Number(id.slice(1))]).filter(Boolean);
+  opslag.setNood({ blokken: n.blokken || [], contacten: n.contacten || [], [veld]: nieuw });
+}
+
 /* ---------- Start ---------- */
 function viewStart() {
   const inhoud = el('div', { class: 'stapel-ruim' });
@@ -629,8 +707,10 @@ function startSecties() {
       taken.length ? el('ul', { class: 'lijst' }, taken.map(({ t, s }) => el('li', {}, taakRijKort(t, s))))
         : el('p', { class: 'leeg' }, D.onderhoud.length ? 'Niets dat binnenkort moet. Mooi zo!' : 'Nog geen onderhoud ingevoerd. Dat doe je bij een apparaat.')),
     el('section', { class: 'stapel', 'aria-labelledby': 'kop-ruimtes' },
-      el('h2', { id: 'kop-ruimtes', class: 'kop-s' }, 'Ruimtes'),
-      el('div', { class: 'raster-2' },
+      el('div', { class: 'rij-tussen' },
+        el('h2', { id: 'kop-ruimtes', class: 'kop-s' }, 'Ruimtes'),
+        ruimtes.length > 1 && !inVolgorde('ruimtes') ? volgordeKnop('ruimtes', () => ruimtes.map((r) => ({ id: r.id, label: r.naam }))) : null),
+      inVolgorde('ruimtes') ? volgordeEditor('Volgorde ruimtes', (ids) => bewaarVolgorde('ruimtes', ids)) : el('div', { class: 'raster-2' },
         ruimtes.map((r) => {
           const n = itemsIn(r.id).length;
           return el('a', { href: `#/ruimte/${r.id}`, class: 'kaart ruimtetegel' }, el('b', {}, r.naam), el('span', {}, `${n} ${n === 1 ? 'onderdeel' : 'onderdelen'}`));
@@ -694,9 +774,14 @@ function viewRuimte(id) {
         r.fotoId ? klikbareFoto(r.fotoId, r.naam, 'kopfoto') : null,
         el('h1', { class: 'titel-m' }, r.naam),
         el('p', { class: 'zacht' }, `${items.length} ${items.length === 1 ? 'onderdeel' : 'onderdelen'}${gasten ? ` · ${gasten} voor gasten` : ''}`)),
-      items.length ? el('ul', { class: 'lijst' }, items.map((i) => el('li', {}, itemRij(i))))
-        : el('p', { class: 'leeg' }, 'Nog niets in deze ruimte. Voeg een apparaat of installatie toe.'),
-      el('button', { type: 'button', class: 'knop knop-primair knop-breed', onclick: () => itemBewerken(null, id) }, ico('plus', 20), 'Apparaat toevoegen')));
+      inVolgorde(`items:${id}`)
+        ? volgordeEditor('Volgorde onderdelen', (ids) => bewaarVolgorde('items', ids))
+        : [
+          items.length > 1 ? el('div', { class: 'rij-tussen' }, el('span'), volgordeKnop(`items:${id}`, () => items.map((i) => ({ id: i.id, label: i.naam, sub: i.soort })))) : null,
+          items.length ? el('ul', { class: 'lijst' }, items.map((i) => el('li', {}, itemRij(i))))
+            : el('p', { class: 'leeg' }, 'Nog niets in deze ruimte. Voeg een apparaat of installatie toe.'),
+          el('button', { type: 'button', class: 'knop knop-primair knop-breed', onclick: () => itemBewerken(null, id) }, ico('plus', 20), 'Apparaat toevoegen')
+        ]));
 }
 
 function itemRij(i) {
@@ -887,10 +972,16 @@ function viewNood() {
       !n ? el('div', { class: 'stapel' },
         el('p', { class: 'leeg' }, 'De noodkaart is nog leeg.'),
         el('button', { type: 'button', class: 'knop knop-primair knop-breed', onclick: () => { opslag.setNood(standaardNoodkaart()); melding('Voorbeeld gezet. Vul de [haakjes] in.'); } }, 'Begin met een voorbeeld')) : null,
-      n ? (n.blokken || []).map((b) => el('div', { class: 'kaart noodblok' },
-        b.fotoId ? klikbareFoto(b.fotoId, b.titel, 'noodblok-foto') : null,
-        el('div', {}, el('b', {}, b.titel), el('p', {}, b.tekst)))) : null,
-      n && (n.contacten || []).length ? el('h2', { class: 'kop-xs' }, 'Wie bel je?') : null,
+      n && (n.blokken || []).length > 1 && !inVolgorde('nood-blokken')
+        ? el('div', { class: 'rij-tussen' }, el('h2', { class: 'kop-xs' }, 'Situaties'), volgordeKnop('nood-blokken', () => n.blokken.map((b, k) => ({ id: `b${k}`, label: b.titel || '(zonder titel)' })))) : null,
+      inVolgorde('nood-blokken')
+        ? volgordeEditor('Volgorde situaties', (ids) => bewaarNoodVolgorde('blokken', ids))
+        : n ? (n.blokken || []).map((b) => el('div', { class: 'kaart noodblok' },
+          b.fotoId ? klikbareFoto(b.fotoId, b.titel, 'noodblok-foto') : null,
+          el('div', {}, el('b', {}, b.titel), el('p', {}, b.tekst)))) : null,
+      n && (n.contacten || []).length ? el('div', { class: 'rij-tussen' }, el('h2', { class: 'kop-xs' }, 'Wie bel je?'),
+        n.contacten.length > 1 && !inVolgorde('nood-contacten') ? volgordeKnop('nood-contacten', () => n.contacten.map((c, k) => ({ id: `c${k}`, label: c.naam || '(zonder naam)', sub: c.telefoon }))) : null) : null,
+      inVolgorde('nood-contacten') ? volgordeEditor('Volgorde contacten', (ids) => bewaarNoodVolgorde('contacten', ids)) :
       n && (n.contacten || []).length ? el('div', { class: 'raster-2' }, n.contacten.map((c) => {
         const tel = telLink(c.telefoon);
         return tel ? el('a', { href: tel, class: 'kaart contact' }, el('b', {}, c.naam), el('span', {}, c.telefoon))
@@ -1016,7 +1107,7 @@ function ruimteBewerken(r) {
       const data = { naam: naam.value.trim(), fotoId: fotoId || null };
       if (r) opslag.update('ruimtes', r.id, data);
       else {
-        const id = opslag.add('ruimtes', { ...data, volgorde: D.ruimtes.length + 1 });
+        const id = opslag.add('ruimtes', { ...data, volgorde: volgendNummer(D.ruimtes) });
         location.hash = `#/ruimte/${id}`;
       }
       tr.bevestig();
@@ -1061,7 +1152,7 @@ function itemBewerken(i, ruimteId) {
       const data = { naam: naam.value.trim(), soort: soort.value.trim(), ruimteId: ruimte.value, voorGasten: gast.checked, fotoId: fotoId || null };
       if (i) opslag.update('items', i.id, data);
       else {
-        const id = opslag.add('items', { ...data, uitleg: { intro: '', stappen: [], probleem: '' }, techniek: {} });
+        const id = opslag.add('items', { ...data, volgorde: volgendNummer(itemsIn(data.ruimteId)), uitleg: { intro: '', stappen: [], probleem: '' }, techniek: {} });
         location.hash = `#/item/${id}/uitleg`;
       }
       tr.bevestig();
