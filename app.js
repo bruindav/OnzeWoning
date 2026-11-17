@@ -1,4 +1,4 @@
-// app.js — fix-7 (import kan bestaande uitleg bijwerken)
+// app.js — fix-8 (import: bijwerken standaard aan, ook onderhoudstaken bijwerken)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-7';
+const VERSIE = 'fix-8';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
@@ -1501,7 +1501,7 @@ function verwerkImport(data, uitvoeren, bijwerken = false) {
     throw new Error('Dit is geen importbestand van Onze Woning.');
   }
   const fotos = data.fotos && typeof data.fotos === 'object' ? data.fotos : {};
-  const tel = { ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, itemsBijgewerkt: 0, taken: 0, papieren: 0, fotos: 0 };
+  const tel = { ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, itemsBijgewerkt: 0, takenBijgewerkt: 0, taken: 0, papieren: 0, fotos: 0 };
   const teWissenFotos = [];
   const fotoIds = new Map();
   const foto = (ref) => {
@@ -1584,10 +1584,26 @@ function verwerkImport(data, uitvoeren, bijwerken = false) {
         if (techAnders) patch.techniek = tech;
         if (Object.keys(patch).length) { tel.itemsAangevuld++; if (uitvoeren) opslag.update('items', iid, patch); }
       }
-      const takenNamen = bestaand ? D.onderhoud.filter((t) => t.itemId === bestaand.id).map((t) => norm(t.taak)) : [];
+      const bestaandeTaken = bestaand ? D.onderhoud.filter((t) => t.itemId === bestaand.id) : [];
+      const takenNamen = bestaandeTaken.map((t) => norm(t.taak));
       (Array.isArray(it.onderhoud) ? it.onderhoud : []).slice(0, 30).forEach((t) => {
         const taak = importTekst(t && t.taak, 120);
-        if (!taak || takenNamen.includes(norm(taak))) return;
+        if (!taak) return;
+        if (takenNamen.includes(norm(taak))) {
+          // fix-8: bij bijwerken ook de uitleg/interval van een bestaande taak vervangen ("laatst gedaan" blijft staan)
+          const oudT = bestaandeTaken.find((x) => norm(x.taak) === norm(taak));
+          if (bijwerken && oudT) {
+            const tp = {};
+            const notitie = importTekst(t.notitie, 1000);
+            if (notitie && notitie !== (oudT.notitie || '')) tp.notitie = notitie;
+            const iv = Number(t.intervalMaanden);
+            if (INTERVALLEN.some(([n]) => n === iv) && iv !== oudT.intervalMaanden) tp.intervalMaanden = iv;
+            const contact = importTekst(t.contact, 120);
+            if (contact && contact !== (oudT.contact || '')) tp.contact = contact;
+            if (Object.keys(tp).length) { tel.takenBijgewerkt++; if (uitvoeren) opslag.update('onderhoud', oudT.id, tp); }
+          }
+          return;
+        }
         takenNamen.push(norm(taak));
         tel.taken++;
         if (uitvoeren) {
@@ -1628,6 +1644,7 @@ function importSamenvatting(t) {
     w(t.itemsAangevuld, 'bestaand onderdeel aangevuld', 'bestaande onderdelen aangevuld'),
     w(t.itemsBijgewerkt, 'bestaand onderdeel bijgewerkt (uitleg/techniek vervangen)', 'bestaande onderdelen bijgewerkt (uitleg/techniek vervangen)'),
     w(t.taken, 'onderhoudstaak', 'onderhoudstaken'),
+    w(t.takenBijgewerkt, 'bestaande onderhoudstaak bijgewerkt', 'bestaande onderhoudstaken bijgewerkt'),
     w(t.papieren, 'papier', 'papieren'),
     w(t.fotos, 'foto', "foto's")
   ].filter(Boolean);
@@ -1645,8 +1662,9 @@ function importeren() {
     try { data = JSON.parse(await f.text()); } catch { melding('Dit is geen geldig importbestand.', true); return; }
     let gewoon, bij;
     try { gewoon = verwerkImport(data, false, false); bij = verwerkImport(data, false, true); } catch (e) { meldFout(e); return; }
-    const kanBijwerken = bij.itemsBijgewerkt > 0;
-    let bijwerken = kanBijwerken && !importSamenvatting(gewoon).length;
+    const kanBijwerken = bij.itemsBijgewerkt > 0 || bij.takenBijgewerkt > 0;
+    // fix-8: staat er in het bestand een nieuwere uitleg, dan staat "bijwerken" standaard aan
+    let bijwerken = kanBijwerken;
     const vakId = nieuwId('bij');
     const overzicht = el('div', { class: 'stapel' });
     const tekenOverzicht = () => {
@@ -1662,9 +1680,9 @@ function importeren() {
         overzicht,
         kanBijwerken ? el('label', { class: 'vinkje', for: vakId },
           el('input', { id: vakId, type: 'checkbox', checked: bijwerken, onchange: (e) => { bijwerken = e.target.checked; tekenOverzicht(); } }),
-          'Bestaande uitleg en techniek bijwerken met de versie uit het bestand') : null,
+          'Bestaande uitleg, techniek en onderhoudstips bijwerken met de versie uit het bestand') : null,
         el('p', { class: 'veld-hint' }, kanBijwerken
-          ? 'Zonder vinkje worden alleen lege velden aangevuld. Met vinkje wordt de uitleg vervangen; eigen aanpassingen in die uitleg gaan dan verloren. Onderhoud (laatst gedaan) en papieren blijven altijd staan.'
+          ? 'Met vinkje wordt de uitleg vervangen door die uit het bestand; eigen aanpassingen in die uitleg gaan dan verloren. Zonder vinkje worden alleen lege velden aangevuld. "Laatst gedaan" bij onderhoud en je papieren blijven altijd staan.'
           : 'Wat je zelf al hebt ingevuld, blijft staan. Alleen lege velden worden aangevuld.')),
       opslaanLabel: 'Importeren',
       opslaan: (importSamenvatting(gewoon).length || kanBijwerken) ? () => {
