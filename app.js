@@ -1,4 +1,4 @@
-// app.js — fix-4 (nieuwe onderdelen standaard zichtbaar voor gasten)
+// app.js — fix-5 (gegevens importeren)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-4';
+const VERSIE = 'fix-5';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
@@ -47,7 +47,8 @@ const ICONS = {
   persoon: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-6 8-6s8 2 8 6"/>',
   rechts: '<path d="M9 5l7 7-7 7"/>',
   greep: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
-  schuif: '<path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4"/>'
+  schuif: '<path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4"/>',
+  importeer: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>'
 };
 function ico(naam, maat = 22) {
   const s = document.createElement('span');
@@ -158,9 +159,10 @@ function taakStatus(t) {
 const ruimteVan = (id) => D.ruimtes.find((r) => r.id === id);
 const itemVan = (id) => D.items.find((i) => i.id === id);
 const ruimteNaam = (id) => (ruimteVan(id) || {}).naam || 'Zonder ruimte';
-const opVolgorde = (a, b) => (a.volgorde ?? 1e9) - (b.volgorde ?? 1e9) || opNaam(a, b);
+const opVolgorde = (a, b) => (a.volgorde ?? 0) - (b.volgorde ?? 0) || opNaam(a, b);
 const itemsIn = (rid) => D.items.filter((i) => i.ruimteId === rid).sort(opVolgorde);
-const volgendNummer = (lijst) => lijst.reduce((m, x) => Math.max(m, Number(x.volgorde) || 0), 0) + 1;
+// Nieuw komt achteraan, ook als oudere kaartjes nog geen volgorde hebben
+const volgendNummer = (lijst) => Math.max(lijst.length, lijst.reduce((m, x) => Math.max(m, Number(x.volgorde) || 0), 0)) + 1;
 const takenVan = (iid) => D.onderhoud.filter((t) => t.itemId === iid);
 const gesorteerdeRuimtes = () => [...D.ruimtes].sort(opVolgorde);
 function voornaam() {
@@ -999,7 +1001,8 @@ function viewMeer() {
     el('ul', { class: 'lijst' },
       rij('let_op', 'Noodkaart bekijken', null, '#/nood'),
       rij('potlood', 'Noodkaart bewerken', noodBewerken),
-      rij('plus', 'Ruimte toevoegen', () => ruimteBewerken(null))),
+      rij('plus', 'Ruimte toevoegen', () => ruimteBewerken(null)),
+      rij('importeer', 'Gegevens importeren', importeren)),
     el('section', { class: 'stapel' },
       el('h2', { class: 'kop-xs' }, 'Account'),
       el('div', { class: 'kaart kaart-p rij' }, ico('persoon'),
@@ -1292,6 +1295,168 @@ function techniekBewerken(i) {
       opslag.update('items', i.id, { techniek: data });
     }
   });
+}
+
+/* ---------- Importeren (fix-5) ----------
+   Leest een importbestand (JSON) in dat Claude maakt op basis van handleidingen.
+   Bestaande ruimtes/onderdelen worden herkend aan hun naam; alleen lege velden worden ingevuld,
+   onderhoudstaken en papieren worden toegevoegd als er nog geen met dezelfde naam is. */
+const importTekst = (v, max = 4000) => String(v ?? '').trim().slice(0, max);
+const importDatum = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : '');
+
+function importTechniek(t) {
+  const uit = {};
+  if (!t || typeof t !== 'object') return uit;
+  TECH_VELDEN.forEach(([k, , type]) => {
+    const v = type === 'date' ? importDatum(t[k]) : importTekst(t[k], 200);
+    if (v) uit[k] = v;
+  });
+  const n = importTekst(t.notities, 4000);
+  if (n) uit.notities = n;
+  return uit;
+}
+
+function verwerkImport(data, uitvoeren) {
+  if (!data || data.formaat !== 'onzewoning-import' || !Array.isArray(data.ruimtes)) {
+    throw new Error('Dit is geen importbestand van Onze Woning.');
+  }
+  const fotos = data.fotos && typeof data.fotos === 'object' ? data.fotos : {};
+  const tel = { ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, taken: 0, papieren: 0, fotos: 0 };
+  const fotoIds = new Map();
+  const foto = (ref) => {
+    if (!ref || !Object.prototype.hasOwnProperty.call(fotos, ref)) return null;
+    const b = fotos[ref];
+    if (typeof b !== 'string' || b.length >= 850000 || !/^[A-Za-z0-9+/=]+$/.test(b)) return null;
+    if (!fotoIds.has(ref)) {
+      tel.fotos++;
+      let id = 'nieuw';
+      if (uitvoeren) { id = opslag.fotoOpslaan(b, 0, 0); fotoCache.set(id, Promise.resolve(dataUrl(b))); }
+      fotoIds.set(ref, id);
+    }
+    return fotoIds.get(ref);
+  };
+  const stappenVan = (lijst) => (Array.isArray(lijst) ? lijst : []).slice(0, 30)
+    .map((s) => ({ tekst: importTekst(s && s.tekst, 1000), fotoId: foto(s && s.foto) }))
+    .filter((s) => s.tekst || s.fotoId);
+
+  let ruimteVolg = volgendNummer(D.ruimtes);
+  data.ruimtes.slice(0, 50).forEach((r) => {
+    const rnaam = importTekst(r && r.naam, 80);
+    if (!rnaam) return;
+    const ruimte = D.ruimtes.find((x) => norm(x.naam) === norm(rnaam));
+    let rid = ruimte ? ruimte.id : null;
+    if (!ruimte) {
+      tel.ruimtesNieuw++;
+      if (uitvoeren) rid = opslag.add('ruimtes', { naam: rnaam, fotoId: null, volgorde: ruimteVolg++ });
+    }
+    let itemVolg = volgendNummer(rid ? D.items.filter((i) => i.ruimteId === rid) : []);
+    (Array.isArray(r.items) ? r.items : []).slice(0, 200).forEach((it) => {
+      const inaam = importTekst(it && it.naam, 80);
+      if (!inaam) return;
+      const u = it.uitleg && typeof it.uitleg === 'object' ? it.uitleg : {};
+      const bestaand = ruimte ? D.items.find((i) => i.ruimteId === rid && norm(i.naam) === norm(inaam)) : null;
+      let iid = bestaand ? bestaand.id : null;
+      if (!bestaand) {
+        tel.itemsNieuw++;
+        const nieuw = {
+          naam: inaam, soort: importTekst(it.soort, 120), ruimteId: rid, voorGasten: it.voorGasten !== false,
+          fotoId: foto(it.foto), volgorde: itemVolg++,
+          uitleg: { intro: importTekst(u.intro), probleem: importTekst(u.probleem), stappen: stappenVan(u.stappen) },
+          techniek: importTechniek(it.techniek)
+        };
+        if (uitvoeren) iid = opslag.add('items', nieuw);
+      } else {
+        const patch = {};
+        if (!bestaand.soort && importTekst(it.soort)) patch.soort = importTekst(it.soort, 120);
+        if (!bestaand.fotoId && it.foto) { const f = foto(it.foto); if (f) patch.fotoId = f; }
+        const oud = bestaand.uitleg || {};
+        const ul = { intro: oud.intro || '', probleem: oud.probleem || '', stappen: oud.stappen || [] };
+        let ulAnders = false;
+        if (!ul.intro && importTekst(u.intro)) { ul.intro = importTekst(u.intro); ulAnders = true; }
+        if (!ul.probleem && importTekst(u.probleem)) { ul.probleem = importTekst(u.probleem); ulAnders = true; }
+        if (!ul.stappen.length && Array.isArray(u.stappen) && u.stappen.length) { ul.stappen = stappenVan(u.stappen); ulAnders = true; }
+        if (ulAnders) patch.uitleg = ul;
+        const tech = { ...(bestaand.techniek || {}) };
+        let techAnders = false;
+        Object.entries(importTechniek(it.techniek)).forEach(([k, v]) => { if (!tech[k]) { tech[k] = v; techAnders = true; } });
+        if (techAnders) patch.techniek = tech;
+        if (Object.keys(patch).length) { tel.itemsAangevuld++; if (uitvoeren) opslag.update('items', iid, patch); }
+      }
+      const takenNamen = bestaand ? D.onderhoud.filter((t) => t.itemId === bestaand.id).map((t) => norm(t.taak)) : [];
+      (Array.isArray(it.onderhoud) ? it.onderhoud : []).slice(0, 30).forEach((t) => {
+        const taak = importTekst(t && t.taak, 120);
+        if (!taak || takenNamen.includes(norm(taak))) return;
+        takenNamen.push(norm(taak));
+        tel.taken++;
+        if (uitvoeren) {
+          opslag.add('onderhoud', {
+            itemId: iid, taak,
+            intervalMaanden: INTERVALLEN.some(([n]) => n === Number(t.intervalMaanden)) ? Number(t.intervalMaanden) : 12,
+            wie: t.wie === 'bedrijf' ? 'bedrijf' : 'zelf', contact: importTekst(t.contact, 120),
+            laatst: importDatum(t.laatst), notitie: importTekst(t.notitie, 1000)
+          });
+        }
+      });
+      const papierNamen = bestaand ? D.papieren.filter((p) => p.itemId === bestaand.id).map((p) => norm(p.titel)) : [];
+      (Array.isArray(it.papieren) ? it.papieren : []).slice(0, 30).forEach((p) => {
+        const titel = importTekst(p && p.titel, 120);
+        if (!titel || papierNamen.includes(norm(titel))) return;
+        papierNamen.push(norm(titel));
+        tel.papieren++;
+        const fotoId = foto(p.foto);
+        if (uitvoeren) {
+          opslag.add('papieren', {
+            itemId: iid, soort: PAPIER_SOORTEN.includes(p.soort) ? p.soort : 'Overig', titel,
+            datum: importDatum(p.datum), bedrag: importTekst(p.bedrag, 20), link: veiligeLink(p.link) || '',
+            fotoId: fotoId || null, notitie: importTekst(p.notitie, 1000)
+          });
+        }
+      });
+    });
+  });
+  return tel;
+}
+
+function importSamenvatting(t) {
+  const w = (n, een, meer) => (n ? `${n} ${n === 1 ? een : meer}` : null);
+  return [
+    w(t.ruimtesNieuw, 'nieuwe ruimte', 'nieuwe ruimtes'),
+    w(t.itemsNieuw, 'nieuw onderdeel', 'nieuwe onderdelen'),
+    w(t.itemsAangevuld, 'bestaand onderdeel aangevuld', 'bestaande onderdelen aangevuld'),
+    w(t.taken, 'onderhoudstaak', 'onderhoudstaken'),
+    w(t.papieren, 'papier', 'papieren'),
+    w(t.fotos, 'foto', "foto's")
+  ].filter(Boolean);
+}
+
+function importeren() {
+  const invoer = el('input', { type: 'file', accept: '.json,application/json', class: 'sr', tabindex: '-1', 'aria-hidden': 'true' });
+  document.body.append(invoer);
+  invoer.addEventListener('change', async () => {
+    const f = invoer.files && invoer.files[0];
+    invoer.remove();
+    if (!f) return;
+    if (f.size > 20 * 1024 * 1024) { melding('Dit bestand is te groot.', true); return; }
+    let data;
+    try { data = JSON.parse(await f.text()); } catch { melding('Dit is geen geldig importbestand.', true); return; }
+    let tel;
+    try { tel = verwerkImport(data, false); } catch (e) { meldFout(e); return; }
+    const regels = importSamenvatting(tel);
+    dialoog({
+      titel: 'Gegevens importeren',
+      bouw: (l) => l.append(
+        regels.length
+          ? el('div', { class: 'stapel' }, el('p', {}, 'Dit wordt toegevoegd:'), el('ul', { class: 'klein' }, regels.map((r) => el('li', {}, r))))
+          : el('p', { class: 'leeg' }, 'Er is niets nieuws om te importeren. Alles staat er al.'),
+        el('p', { class: 'veld-hint' }, 'Wat je zelf al hebt ingevuld, blijft staan. Alleen lege velden worden aangevuld.')),
+      opslaanLabel: 'Importeren',
+      opslaan: regels.length ? () => {
+        const klaar = verwerkImport(data, true);
+        melding(`Geïmporteerd: ${importSamenvatting(klaar).join(', ')}`);
+      } : null
+    });
+  });
+  invoer.click();
 }
 
 function noodBewerken() {
