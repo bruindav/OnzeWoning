@@ -1,4 +1,4 @@
-// app.js — fix-3 (volgorde van kaartjes aanpassen)
+// app.js — fix-4 (nieuwe onderdelen standaard zichtbaar voor gasten)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-3';
+const VERSIE = 'fix-4';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
@@ -1140,7 +1140,7 @@ function itemBewerken(i, ruimteId) {
   const ruimtes = gesorteerdeRuimtes();
   const ruimte = keuze(ruimtes.map((r) => [r.id, r.naam]), i ? i.ruimteId : ruimteId);
   const gastId = nieuwId('g');
-  const gast = el('input', { id: gastId, type: 'checkbox', checked: i ? !!i.voorGasten : false });
+  const gast = el('input', { id: gastId, type: 'checkbox', checked: i ? !!i.voorGasten : true }); // fix-4: nieuw = standaard zichtbaar voor gasten
   dialoog({
     titel: i ? 'Onderdeel bewerken' : 'Nieuw apparaat of onderdeel',
     bouw: (l) => l.append(
