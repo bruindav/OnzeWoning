@@ -1,15 +1,17 @@
 # Onze Woning
-<!-- README — fix-1 -->
+<!-- README — fix-6 -->
 
 Huishandleiding als web-app: per ruimte de apparaten en installaties, met
 - **Zo werkt het**: korte stappen in eenvoudige taal, met een foto per stap
 - **Onderhoud**: wat moet er gebeuren, hoe vaak, wanneer het laatst gedaan is, met geschiedenis
-- **Papieren**: handleidingen, facturen en offertes als link of als foto
+- **Papieren**: handleidingen, facturen en offertes als PDF, link of foto. PDF's zijn ook offline te openen (Meer → Alle PDF's offline bewaren)
 - **Techniek**: merk, type, serienummer, garantie, installateur
 - **Noodkaart**: wat te doen bij lekkage, stroomuitval of gaslucht, en wie je belt
 - **Zoeken** in alles
 
-Werkt op telefoon en computer, ook zonder internet (lezen). Foto's worden in de browser verkleind en in de database opgeslagen, dus je hebt geen Firebase Storage of Blaze-abonnement nodig.
+Werkt op telefoon en computer, ook zonder internet (lezen). Foto's worden in de browser verkleind en PDF's in stukjes geknipt; alles staat in de database, dus je hebt geen Firebase Storage of Blaze-abonnement nodig.
+
+**Let op na fix-6:** publiceer de nieuwe `firestore.rules` opnieuw in de Firebase-console, anders kun je geen PDF's opslaan.
 
 ## Eerst proberen
 Open de app zonder Firebase-koppeling en kies **Bekijk met voorbeeldgegevens**. Alles blijft dan op dat apparaat.

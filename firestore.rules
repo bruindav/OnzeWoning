@@ -1,4 +1,4 @@
-// firestore.rules — fix-1
+// firestore.rules — fix-6 (PDF's: bestanden + bestanddelen)
 // Alleen "leden" (jij en je partner) mogen lezen en schrijven.
 // Een lid voeg je toe in de Firebase-console: collectie "leden", document-ID = de gebruikers-ID
 // die de app toont na de eerste keer inloggen. Inhoud mag bijv. { naam: "Dave" } zijn.
@@ -23,6 +23,20 @@ service cloud.firestore {
       allow read, delete: if isLid();
       allow create, update: if isLid()
         && request.resource.data.mime == 'image/jpeg'
+        && request.resource.data.data is string
+        && request.resource.data.data.size() < 900000;
+    }
+
+    // PDF's (fix-6): kaart met gegevens + losse stukjes van max ~600 kB
+    match /bestanden/{id} {
+      allow read, delete: if isLid();
+      allow create, update: if isLid()
+        && request.resource.data.delen is int && request.resource.data.delen <= 40
+        && request.resource.data.grootte is int && request.resource.data.grootte <= 21000000;
+    }
+    match /bestanddelen/{id} {
+      allow read, delete: if isLid();
+      allow create, update: if isLid()
         && request.resource.data.data is string
         && request.resource.data.data.size() < 900000;
     }

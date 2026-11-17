@@ -1,4 +1,4 @@
-// app.js — fix-5 (gegevens importeren)
+// app.js — fix-6 (PDF's in de app en offline bewaren)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-5';
+const VERSIE = 'fix-6';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
@@ -276,6 +276,137 @@ function fotoVeld({ fotoId, tracker, onWijzig, label = 'Foto' }) {
   return w;
 }
 
+/* ---------- PDF's (fix-6) ---------- */
+const PDF_DEEL = 600 * 1024;              // bytes per stukje (past ruim in één database-document)
+const PDF_MAX = 20 * 1024 * 1024;         // max 20 MB per PDF
+const PDF_CACHE = 'ow-pdf-v1';            // offline kopieën op dit apparaat
+
+function naarB64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i += 0x8000) s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function vanB64(b) {
+  const s = atob(b);
+  const u = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) u[i] = s.charCodeAt(i);
+  return u;
+}
+const fmtMB = (n) => (n < 1024 * 1024 ? `${Math.max(1, Math.round(n / 1024))} kB` : `${(n / 1024 / 1024).toLocaleString('nl-NL', { maximumFractionDigits: 1 })} MB`);
+const aantalPdf = (n) => `${n} PDF${n === 1 ? '' : "'s"}`;
+const pdfSleutel = (id) => new Request(new URL(`./__pdf/${encodeURIComponent(id)}`, document.baseURI).href);
+async function pdfCache() {
+  try { return 'caches' in window ? await caches.open(PDF_CACHE) : null; } catch { return null; }
+}
+async function pdfIsOffline(id) {
+  const c = await pdfCache();
+  return !!(c && await c.match(pdfSleutel(id)));
+}
+async function pdfBlob(meta, voortgang) {
+  const c = await pdfCache();
+  if (c) {
+    const hit = await c.match(pdfSleutel(meta.id));
+    if (hit) return hit.blob();
+  }
+  const delen = [];
+  for (let i = 0; i < meta.delen; i++) {
+    delen.push(vanB64(await opslag.bestandDeelLaden(meta.id, i)));
+    if (voortgang) voortgang(i + 1, meta.delen);
+  }
+  const blob = new Blob(delen, { type: 'application/pdf' });
+  if (c) { try { await c.put(pdfSleutel(meta.id), new Response(blob, { headers: { 'Content-Type': 'application/pdf' } })); } catch { /* opslag vol */ } }
+  return blob;
+}
+async function pdfUitCache(id) {
+  const c = await pdfCache();
+  if (c) { try { await c.delete(pdfSleutel(id)); } catch { /* niets */ } }
+}
+function pdfVerwijderen(meta) {
+  if (!meta) return;
+  opslag.bestandVerwijderen(meta);
+  pdfUitCache(meta.id);
+}
+
+// Laadt de PDF (uit de offline kopie of de database) en toont een knop om hem te openen.
+// Openen gebeurt via een echte tik, anders blokkeert de telefoon het venster.
+async function pdfOpenen(meta, titel) {
+  const status = el('p', { class: 'veld-hint' }, 'PDF wordt geladen…');
+  const d = dialoog({ titel: titel || meta.naam, bouw: (l) => l.append(status) });
+  try {
+    const blob = await pdfBlob(meta, (i, n) => { status.textContent = `PDF wordt geladen… ${i} van ${n}`; });
+    const url = URL.createObjectURL(blob);
+    d.addEventListener('close', () => setTimeout(() => URL.revokeObjectURL(url), 60000));
+    const android = /Android/i.test(navigator.userAgent);
+    vervang(status.parentNode,
+      el('p', {}, `${meta.naam} · ${fmtMB(meta.grootte)}`),
+      el('p', { class: 'slot-noot' }, ico('vink', 16), 'Staat nu ook offline op dit apparaat'),
+      el('a', { href: url, target: '_blank', rel: 'noopener', download: android ? meta.naam : null, class: 'knop knop-primair knop-breed' }, ico('papier', 20), 'PDF openen'));
+  } catch (e) {
+    status.textContent = navigator.onLine ? `Laden lukte niet: ${e.message || e}` : 'Deze PDF staat nog niet offline op dit apparaat. Open hem een keer met internet.';
+  }
+}
+
+function pdfTracker() {
+  const nieuw = [], weg = [];
+  return {
+    nieuw, weg,
+    bevestig() { weg.forEach(pdfVerwijderen); },
+    terugdraaien() { nieuw.forEach(pdfVerwijderen); }
+  };
+}
+
+function pdfVeld({ bestand, tracker, onWijzig }) {
+  const w = el('div', { class: 'fotoveld' });
+  let huidig = bestand || null;
+  let bezig = '';
+  const invoer = el('input', { type: 'file', accept: 'application/pdf,.pdf', class: 'sr', tabindex: '-1', 'aria-hidden': 'true' });
+  invoer.addEventListener('change', async () => {
+    const f = invoer.files && invoer.files[0];
+    invoer.value = '';
+    if (!f) return;
+    if (f.size > PDF_MAX) { melding(`Deze PDF is te groot (${fmtMB(f.size)}). Maximaal ${fmtMB(PDF_MAX)}.`, true); return; }
+    if (opslag.soort === 'cloud' && !navigator.onLine) { melding('Voor het toevoegen van een PDF heb je internet nodig.', true); return; }
+    try {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      if (String.fromCharCode(...bytes.subarray(0, 5)) !== '%PDF-') { melding('Dit is geen PDF-bestand.', true); return; }
+      bezig = 'Opslaan…'; teken();
+      const meta = await opslag.bestandOpslaan(f.name.slice(0, 120), bytes, (i, n) => { bezig = `Opslaan… ${i} van ${n}`; teken(); });
+      tracker.nieuw.push(meta);
+      if (huidig) tracker.weg.push(huidig);
+      huidig = meta;
+      onWijzig(meta);
+      // meteen offline beschikbaar op dit apparaat
+      const c = await pdfCache();
+      if (c) { try { await c.put(pdfSleutel(meta.id), new Response(new Blob([bytes], { type: 'application/pdf' }), { headers: { 'Content-Type': 'application/pdf' } })); } catch { /* vol */ } }
+    } catch (e) { meldFout(e); }
+    bezig = '';
+    teken();
+  });
+  function teken() {
+    vervang(w, invoer,
+      bezig ? el('p', { class: 'veld-hint', role: 'status' }, bezig) : null,
+      !bezig && huidig ? el('div', { class: 'kaart kaart-p rij' }, el('span', { class: 'doc-ico', 'aria-hidden': 'true' }, 'PDF'),
+        el('span', { class: 'lijst-tekst' }, el('span', { class: 'lijst-titel' }, huidig.naam), el('span', { class: 'lijst-sub' }, fmtMB(huidig.grootte)))) : null,
+      !bezig ? el('div', { class: 'rij' },
+        el('button', { type: 'button', class: 'knop knop-rand knop-klein', onclick: () => invoer.click() }, ico('papier', 18), huidig ? 'Andere PDF' : 'PDF toevoegen'),
+        huidig ? el('button', { type: 'button', class: 'knop knop-tekst knop-klein', onclick: () => { tracker.weg.push(huidig); huidig = null; onWijzig(null); teken(); } }, 'PDF weghalen') : null) : null);
+  }
+  teken();
+  return w;
+}
+
+async function allesOffline() {
+  const lijst = D.papieren.filter((p) => p.bestand && p.bestand.id);
+  if (!lijst.length) { melding('Er zijn nog geen PDF\'s toegevoegd.'); return; }
+  const totaal = lijst.reduce((s, p) => s + (p.bestand.grootte || 0), 0);
+  if (!await bevestig(`${aantalPdf(lijst.length)}, samen ${fmtMB(totaal)}, op dit apparaat bewaren?`, 'Bewaren')) return;
+  let ok = 0, fout = 0;
+  for (const p of lijst) {
+    try { await pdfBlob(p.bestand); ok++; } catch { fout++; }
+  }
+  melding(fout ? `${ok} bewaard, ${fout} lukte niet. Heb je internet?` : `Klaar: ${aantalPdf(ok)} offline op dit apparaat.`, !!fout);
+}
+
 /* ---------- Opslag: cloud (Firestore) ---------- */
 function cloudOpslag() {
   const stempel = () => ({ gewijzigd: serverTimestamp() });
@@ -319,12 +450,35 @@ function cloudOpslag() {
       const s = await getDoc(doc(db, 'fotos', id));
       return s.exists() ? s.data().data : null;
     },
-    fotoVerwijderen(id) { deleteDoc(doc(db, 'fotos', id)).catch(meldFout); }
+    fotoVerwijderen(id) { deleteDoc(doc(db, 'fotos', id)).catch(meldFout); },
+    // fix-6: PDF's, in stukjes in de database (geen betaalde bestandsopslag nodig)
+    async bestandOpslaan(naam, bytes, voortgang) {
+      const id = doc(collection(db, 'bestanden')).id;
+      const delen = Math.ceil(bytes.length / PDF_DEEL);
+      for (let i = 0; i < delen; i++) {
+        await setDoc(doc(db, 'bestanddelen', `${id}_${i}`), { bestandId: id, nr: i, data: naarB64(bytes.subarray(i * PDF_DEEL, (i + 1) * PDF_DEEL)) });
+        voortgang(i + 1, delen);
+      }
+      await setDoc(doc(db, 'bestanden', id), { naam, type: 'application/pdf', grootte: bytes.length, delen, gemaakt: serverTimestamp() });
+      return { id, naam, grootte: bytes.length, delen };
+    },
+    async bestandDeelLaden(id, nr) {
+      const s = await getDoc(doc(db, 'bestanddelen', `${id}_${nr}`));
+      if (!s.exists()) throw new Error('Een deel van de PDF ontbreekt.');
+      return s.data().data;
+    },
+    bestandVerwijderen(meta) {
+      const b = writeBatch(db);
+      for (let i = 0; i < (meta.delen || 0); i++) b.delete(doc(db, 'bestanddelen', `${meta.id}_${i}`));
+      b.delete(doc(db, 'bestanden', meta.id));
+      b.commit().catch(meldFout);
+    }
   };
 }
 
 /* ---------- Opslag: demo (alleen op dit apparaat) ---------- */
 const DEMO_SLEUTEL = 'onzewoning-demo-v1';
+const demoBestanden = new Map(); // fix-6: PDF's in de demo alleen in het geheugen
 function demoOpslag() {
   let st = null;
   try { st = JSON.parse(localStorage.getItem(DEMO_SLEUTEL)); } catch { st = null; }
@@ -361,7 +515,21 @@ function demoOpslag() {
     setNood(d) { st.nood = JSON.parse(JSON.stringify(d)); sync(); },
     fotoOpslaan(b64) { const n = id(); fotos.set(n, b64); bewaar(); return n; },
     async fotoLaden(i) { return fotos.get(i) || null; },
-    fotoVerwijderen(i) { fotos.delete(i); bewaar(); }
+    fotoVerwijderen(i) { fotos.delete(i); bewaar(); },
+    async bestandOpslaan(naam, bytes, voortgang) {
+      const n = id();
+      const delen = [];
+      for (let i = 0; i < Math.ceil(bytes.length / PDF_DEEL); i++) delen.push(naarB64(bytes.subarray(i * PDF_DEEL, (i + 1) * PDF_DEEL)));
+      demoBestanden.set(n, delen);
+      voortgang(delen.length, delen.length);
+      return { id: n, naam, grootte: bytes.length, delen: delen.length };
+    },
+    async bestandDeelLaden(i, nr) {
+      const d = demoBestanden.get(i);
+      if (!d) throw new Error('In de demo worden PDF\'s niet bewaard na herladen.');
+      return d[nr];
+    },
+    bestandVerwijderen(meta) { demoBestanden.delete(meta.id); }
   };
 }
 
@@ -883,9 +1051,13 @@ function papierLijst(papieren, metItem) {
   return el('ul', { class: 'lijst' }, papieren.map((p) => {
     const link = veiligeLink(p.link);
     const sub = [p.soort, metItem ? ((itemVan(p.itemId) || {}).naam || 'Algemeen') : null, p.datum ? fmtDatum(p.datum) : null, p.bedrag ? `€ ${p.bedrag}` : null].filter(Boolean).join(' · ');
-    const voorkant = p.fotoId ? fotoImg(p.fotoId, '', 'doc-ico') : el('span', { class: 'doc-ico', 'aria-hidden': 'true' }, link ? 'LINK' : 'DOC');
+    const pdf = p.bestand && p.bestand.id ? p.bestand : null;
+    const voorkant = pdf ? el('span', { class: 'doc-ico', 'aria-hidden': 'true' }, 'PDF')
+      : p.fotoId ? fotoImg(p.fotoId, '', 'doc-ico') : el('span', { class: 'doc-ico', 'aria-hidden': 'true' }, link ? 'LINK' : 'DOC');
     const tekst = el('span', { class: 'lijst-tekst' }, el('span', { class: 'lijst-titel' }, p.titel), el('span', { class: 'lijst-sub' }, sub));
-    const hoofd = link
+    const hoofd = pdf
+      ? el('button', { type: 'button', class: 'kaart lijst-rij', onclick: () => pdfOpenen(pdf, p.titel) }, voorkant, tekst)
+      : link
       ? el('a', { href: link, target: '_blank', rel: 'noopener noreferrer', class: 'kaart lijst-rij' }, voorkant, tekst, ico('link', 18))
       : p.fotoId
         ? el('button', { type: 'button', class: 'kaart lijst-rij', onclick: () => fotoTonen(p.fotoId, p.titel) }, voorkant, tekst)
@@ -1002,7 +1174,8 @@ function viewMeer() {
       rij('let_op', 'Noodkaart bekijken', null, '#/nood'),
       rij('potlood', 'Noodkaart bewerken', noodBewerken),
       rij('plus', 'Ruimte toevoegen', () => ruimteBewerken(null)),
-      rij('importeer', 'Gegevens importeren', importeren)),
+      rij('importeer', 'Gegevens importeren', importeren),
+      rij('papier', 'Alle PDF\'s offline bewaren', allesOffline)),
     el('section', { class: 'stapel' },
       el('h2', { class: 'kop-xs' }, 'Account'),
       el('div', { class: 'kaart kaart-p rij' }, ico('persoon'),
@@ -1167,7 +1340,7 @@ function itemBewerken(i, ruimteId) {
       const weg = [['items', i.id], ...fotosVanItem(i).map((f) => ['fotos', f])];
       D.onderhoud.filter((t) => t.itemId === i.id).forEach((t) => weg.push(['onderhoud', t.id]));
       D.historie.filter((h) => h.itemId === i.id).forEach((h) => weg.push(['historie', h.id]));
-      D.papieren.filter((p) => p.itemId === i.id).forEach((p) => { weg.push(['papieren', p.id]); if (p.fotoId) weg.push(['fotos', p.fotoId]); });
+      D.papieren.filter((p) => p.itemId === i.id).forEach((p) => { weg.push(['papieren', p.id]); if (p.fotoId) weg.push(['fotos', p.fotoId]); pdfVerwijderen(p.bestand); });
       opslag.removeMany(weg);
       location.hash = `#/ruimte/${i.ruimteId}`;
     } : null
@@ -1244,7 +1417,9 @@ function taakBewerken(itemId, t) {
 
 function papierBewerken(itemId, p) {
   const tr = fotoTracker();
+  const ptr = pdfTracker();
   let fotoId = p ? p.fotoId || null : null;
+  let bestand = p && p.bestand && p.bestand.id ? p.bestand : null;
   const itemKeuze = keuze([['', 'Algemeen (geen apparaat)'], ...[...D.items].sort(opNaam).map((i) => [i.id, `${i.naam} (${ruimteNaam(i.ruimteId)})`])], p ? p.itemId || '' : itemId || '');
   const soort = keuze(PAPIER_SOORTEN.map((s) => [s, s]), p ? p.soort : 'Handleiding');
   const titel = tekstInvoer(p && p.titel, { required: true, placeholder: 'Bijv. Handleiding gebruiker', autocomplete: 'off' });
@@ -1258,6 +1433,8 @@ function papierBewerken(itemId, p) {
       veld('Hoort bij', itemKeuze),
       el('div', { class: 'twee-kol' }, veld('Soort', soort), veld('Datum (mag)', datum)),
       veld('Titel', titel),
+      el('div', { class: 'veld' }, el('span', { class: 'veld-label' }, 'PDF (mag)'), el('span', { class: 'veld-hint' }, 'Bijv. de handleiding of de factuur. Werkt ook zonder internet. Max 20 MB.'),
+        pdfVeld({ bestand, tracker: ptr, onWijzig: (m) => { bestand = m; } })),
       veld('Link (mag)', link, 'Bijv. de handleiding op de site van de fabrikant, of een bestand in Google Drive.'),
       el('div', { class: 'veld' }, el('span', { class: 'veld-label' }, 'Foto (mag)'), el('span', { class: 'veld-hint' }, 'Bijv. van de bon of de garantiekaart.'),
         fotoVeld({ fotoId, tracker: tr, onWijzig: (id) => { fotoId = id; } })),
@@ -1266,17 +1443,20 @@ function papierBewerken(itemId, p) {
     opslaan: () => {
       const l = link.value.trim();
       if (l && !veiligeLink(l)) { link.setAttribute('aria-invalid', 'true'); link.focus(); melding('De link moet beginnen met https://', true); return false; }
-      const data = { itemId: itemKeuze.value || null, soort: soort.value, titel: titel.value.trim(), datum: datum.value || '', bedrag: bedrag.value.trim(), link: l ? veiligeLink(l) : '', fotoId: fotoId || null, notitie: notitie.value.trim() };
+      const data = { itemId: itemKeuze.value || null, soort: soort.value, titel: titel.value.trim(), datum: datum.value || '', bedrag: bedrag.value.trim(), link: l ? veiligeLink(l) : '', fotoId: fotoId || null, bestand: bestand || null, notitie: notitie.value.trim() };
       if (p) opslag.update('papieren', p.id, data); else opslag.add('papieren', data);
       tr.bevestig();
+      ptr.bevestig();
     },
-    bijAnnuleren: () => tr.terugdraaien(),
+    bijAnnuleren: () => { tr.terugdraaien(); ptr.terugdraaien(); },
     verwijder: p ? async () => {
       if (!await bevestig(`"${p.titel}" verwijderen?`)) return false;
       tr.terugdraaien();
+      ptr.terugdraaien();
       const weg = [['papieren', p.id]];
       if (p.fotoId) weg.push(['fotos', p.fotoId]);
       opslag.removeMany(weg);
+      pdfVerwijderen(p.bestand);
     } : null
   });
 }
