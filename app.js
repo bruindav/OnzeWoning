@@ -1,4 +1,4 @@
-// app.js — fix-6 (PDF's in de app en offline bewaren)
+// app.js — fix-7 (import kan bestaande uitleg bijwerken)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-6';
+const VERSIE = 'fix-7';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
@@ -1496,12 +1496,13 @@ function importTechniek(t) {
   return uit;
 }
 
-function verwerkImport(data, uitvoeren) {
+function verwerkImport(data, uitvoeren, bijwerken = false) {
   if (!data || data.formaat !== 'onzewoning-import' || !Array.isArray(data.ruimtes)) {
     throw new Error('Dit is geen importbestand van Onze Woning.');
   }
   const fotos = data.fotos && typeof data.fotos === 'object' ? data.fotos : {};
-  const tel = { ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, taken: 0, papieren: 0, fotos: 0 };
+  const tel = { ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, itemsBijgewerkt: 0, taken: 0, papieren: 0, fotos: 0 };
+  const teWissenFotos = [];
   const fotoIds = new Map();
   const foto = (ref) => {
     if (!ref || !Object.prototype.hasOwnProperty.call(fotos, ref)) return null;
@@ -1545,6 +1546,27 @@ function verwerkImport(data, uitvoeren) {
           techniek: importTechniek(it.techniek)
         };
         if (uitvoeren) iid = opslag.add('items', nieuw);
+      } else if (bijwerken) {
+        // fix-7: bestaande uitleg/techniek vervangen door de versie uit het bestand (alleen als de tekst anders is)
+        const patch = {};
+        if (importTekst(it.soort) && importTekst(it.soort, 120) !== (bestaand.soort || '')) patch.soort = importTekst(it.soort, 120);
+        if (!bestaand.fotoId && it.foto) { const f = foto(it.foto); if (f) patch.fotoId = f; }
+        const oud = bestaand.uitleg || {};
+        const nieuweStappen = (Array.isArray(u.stappen) ? u.stappen : []).slice(0, 30);
+        const tekstOud = JSON.stringify([oud.intro || '', oud.probleem || '', (oud.stappen || []).map((x) => x.tekst || '')]);
+        const tekstNieuw = JSON.stringify([importTekst(u.intro), importTekst(u.probleem),
+          nieuweStappen.map((x) => importTekst(x && x.tekst, 1000)).filter((t, n) => t || (nieuweStappen[n] && nieuweStappen[n].foto))]);
+        if (tekstOud !== tekstNieuw) {
+          const stappen = stappenVan(nieuweStappen);
+          patch.uitleg = { intro: importTekst(u.intro), probleem: importTekst(u.probleem), stappen };
+          const blijven = new Set(stappen.map((x) => x.fotoId).concat([bestaand.fotoId]));
+          (oud.stappen || []).forEach((x) => { if (x.fotoId && !blijven.has(x.fotoId)) teWissenFotos.push(x.fotoId); });
+        }
+        const tech = { ...(bestaand.techniek || {}) };
+        let techAnders = false;
+        Object.entries(importTechniek(it.techniek)).forEach(([k, v]) => { if (tech[k] !== v) { tech[k] = v; techAnders = true; } });
+        if (techAnders) patch.techniek = tech;
+        if (Object.keys(patch).length) { tel.itemsBijgewerkt++; if (uitvoeren) opslag.update('items', iid, patch); }
       } else {
         const patch = {};
         if (!bestaand.soort && importTekst(it.soort)) patch.soort = importTekst(it.soort, 120);
@@ -1594,6 +1616,7 @@ function verwerkImport(data, uitvoeren) {
       });
     });
   });
+  if (uitvoeren) teWissenFotos.forEach((id) => { opslag.fotoVerwijderen(id); fotoCache.delete(id); });
   return tel;
 }
 
@@ -1603,6 +1626,7 @@ function importSamenvatting(t) {
     w(t.ruimtesNieuw, 'nieuwe ruimte', 'nieuwe ruimtes'),
     w(t.itemsNieuw, 'nieuw onderdeel', 'nieuwe onderdelen'),
     w(t.itemsAangevuld, 'bestaand onderdeel aangevuld', 'bestaande onderdelen aangevuld'),
+    w(t.itemsBijgewerkt, 'bestaand onderdeel bijgewerkt (uitleg/techniek vervangen)', 'bestaande onderdelen bijgewerkt (uitleg/techniek vervangen)'),
     w(t.taken, 'onderhoudstaak', 'onderhoudstaken'),
     w(t.papieren, 'papier', 'papieren'),
     w(t.fotos, 'foto', "foto's")
@@ -1619,19 +1643,33 @@ function importeren() {
     if (f.size > 20 * 1024 * 1024) { melding('Dit bestand is te groot.', true); return; }
     let data;
     try { data = JSON.parse(await f.text()); } catch { melding('Dit is geen geldig importbestand.', true); return; }
-    let tel;
-    try { tel = verwerkImport(data, false); } catch (e) { meldFout(e); return; }
-    const regels = importSamenvatting(tel);
+    let gewoon, bij;
+    try { gewoon = verwerkImport(data, false, false); bij = verwerkImport(data, false, true); } catch (e) { meldFout(e); return; }
+    const kanBijwerken = bij.itemsBijgewerkt > 0;
+    let bijwerken = kanBijwerken && !importSamenvatting(gewoon).length;
+    const vakId = nieuwId('bij');
+    const overzicht = el('div', { class: 'stapel' });
+    const tekenOverzicht = () => {
+      const regels = importSamenvatting(bijwerken ? bij : gewoon);
+      vervang(overzicht, regels.length
+        ? [el('p', {}, 'Dit gebeurt:'), el('ul', { class: 'klein' }, regels.map((r) => el('li', {}, r)))]
+        : el('p', { class: 'leeg' }, kanBijwerken ? 'Er is niets nieuws. Wel is de uitleg in het bestand anders dan in de app: vink hieronder "bijwerken" aan.' : 'Er is niets nieuws om te importeren. Alles staat er al.'));
+    };
+    tekenOverzicht();
     dialoog({
       titel: 'Gegevens importeren',
-      bouw: (l) => l.append(
-        regels.length
-          ? el('div', { class: 'stapel' }, el('p', {}, 'Dit wordt toegevoegd:'), el('ul', { class: 'klein' }, regels.map((r) => el('li', {}, r))))
-          : el('p', { class: 'leeg' }, 'Er is niets nieuws om te importeren. Alles staat er al.'),
-        el('p', { class: 'veld-hint' }, 'Wat je zelf al hebt ingevuld, blijft staan. Alleen lege velden worden aangevuld.')),
+      bouw: (l) => vervang(l,
+        overzicht,
+        kanBijwerken ? el('label', { class: 'vinkje', for: vakId },
+          el('input', { id: vakId, type: 'checkbox', checked: bijwerken, onchange: (e) => { bijwerken = e.target.checked; tekenOverzicht(); } }),
+          'Bestaande uitleg en techniek bijwerken met de versie uit het bestand') : null,
+        el('p', { class: 'veld-hint' }, kanBijwerken
+          ? 'Zonder vinkje worden alleen lege velden aangevuld. Met vinkje wordt de uitleg vervangen; eigen aanpassingen in die uitleg gaan dan verloren. Onderhoud (laatst gedaan) en papieren blijven altijd staan.'
+          : 'Wat je zelf al hebt ingevuld, blijft staan. Alleen lege velden worden aangevuld.')),
       opslaanLabel: 'Importeren',
-      opslaan: regels.length ? () => {
-        const klaar = verwerkImport(data, true);
+      opslaan: (importSamenvatting(gewoon).length || kanBijwerken) ? () => {
+        if (!importSamenvatting(bijwerken ? bij : gewoon).length) { melding('Vink "bijwerken" aan of kies Annuleren.', true); return false; }
+        const klaar = verwerkImport(data, true, bijwerken);
         melding(`Geïmporteerd: ${importSamenvatting(klaar).join(', ')}`);
       } : null
     });
