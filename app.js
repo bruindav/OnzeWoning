@@ -1,4 +1,4 @@
-// app.js — fix-8 (import: bijwerken standaard aan, ook onderhoudstaken bijwerken)
+// app.js — fix-9 (PDF in de app tonen, onderhoudsbalk op startscherm, PDF's in importbestand)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-8';
+const VERSIE = 'fix-9';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
@@ -327,23 +327,179 @@ function pdfVerwijderen(meta) {
   pdfUitCache(meta.id);
 }
 
-// Laadt de PDF (uit de offline kopie of de database) en toont een knop om hem te openen.
-// Openen gebeurt via een echte tik, anders blokkeert de telefoon het venster.
+// fix-9: PDF in de app tonen met pdf.js (staat in lib/pdfjs, werkt dus ook offline).
+// Chrome op Android kan geen PDF in een pagina tonen en downloadt hem anders.
+let pdfjsBelofte = null;
+function laadPdfjs() {
+  if (!pdfjsBelofte) {
+    pdfjsBelofte = import('./lib/pdfjs/pdf.min.mjs').then((lib) => {
+      lib.GlobalWorkerOptions.workerSrc = new URL('./lib/pdfjs/pdf.worker.min.mjs', document.baseURI).href;
+      return lib;
+    }).catch((e) => { pdfjsBelofte = null; throw e; });
+  }
+  return pdfjsBelofte;
+}
+
 async function pdfOpenen(meta, titel) {
-  const status = el('p', { class: 'veld-hint' }, 'PDF wordt geladen…');
-  const d = dialoog({ titel: titel || meta.naam, bouw: (l) => l.append(status) });
+  const naam = titel || meta.naam;
+  const terugKnop = el('button', { type: 'button', class: 'icoonknop', 'aria-label': 'Terug' }, ico('terug'));
+  const pagInfo = el('span', { class: 'pdf-pag', 'aria-live': 'polite' }, '');
+  const zoomUit = el('button', { type: 'button', class: 'icoonknop pdf-zoom', 'aria-label': 'Uitzoomen', disabled: true }, '−');
+  const zoomIn = el('button', { type: 'button', class: 'icoonknop pdf-zoom', 'aria-label': 'Inzoomen', disabled: true }, '+');
+  const download = el('a', { class: 'icoonknop', 'aria-label': 'PDF downloaden', title: 'Downloaden', hidden: true }, ico('importeer'));
+  const status = el('p', { class: 'pdf-status', role: 'status' }, 'PDF wordt geladen…');
+  const blad = el('div', { class: 'pdf-blad' });
+  const scroller = el('div', { class: 'pdf-scroll' }, status, blad);
+  const kader = el('div', { class: 'pdf-kijker', role: 'dialog', 'aria-modal': 'true', 'aria-label': naam },
+    el('div', { class: 'pdf-kop' }, terugKnop, el('span', { class: 'pdf-titel' }, naam), pagInfo, zoomUit, zoomIn, download),
+    scroller);
+
+  let url = null, docPdf = null, taak = null, gesloten = false, waarnemer = null, opResize = null;
+  const vorigeFocus = document.activeElement;
+  document.body.append(kader);
+  document.body.classList.add('pdf-open');
+  terugKnop.focus();
+  history.pushState({ pdfKijker: true }, '');
+  const opPop = () => sluit(true);
+  window.addEventListener('popstate', opPop);
+  const opToets = (e) => { if (e.key === 'Escape') { e.preventDefault(); terugKnop.click(); } };
+  document.addEventListener('keydown', opToets);
+  function sluit(viaHistorie) {
+    if (gesloten) return;
+    gesloten = true;
+    window.removeEventListener('popstate', opPop);
+    document.removeEventListener('keydown', opToets);
+    if (waarnemer) waarnemer.disconnect();
+    if (opResize) window.removeEventListener('resize', opResize);
+    if (taak) { try { taak.destroy(); } catch { /* al weg */ } }
+    if (url) setTimeout(() => URL.revokeObjectURL(url), 60000);
+    kader.remove();
+    document.body.classList.remove('pdf-open');
+    if (!viaHistorie && history.state && history.state.pdfKijker) history.back();
+    if (vorigeFocus && vorigeFocus.focus) vorigeFocus.focus();
+  }
+  terugKnop.addEventListener('click', () => sluit(false));
+
+  let bytes;
   try {
     const blob = await pdfBlob(meta, (i, n) => { status.textContent = `PDF wordt geladen… ${i} van ${n}`; });
-    const url = URL.createObjectURL(blob);
-    d.addEventListener('close', () => setTimeout(() => URL.revokeObjectURL(url), 60000));
-    const android = /Android/i.test(navigator.userAgent);
-    vervang(status.parentNode,
-      el('p', {}, `${meta.naam} · ${fmtMB(meta.grootte)}`),
-      el('p', { class: 'slot-noot' }, ico('vink', 16), 'Staat nu ook offline op dit apparaat'),
-      el('a', { href: url, target: '_blank', rel: 'noopener', download: android ? meta.naam : null, class: 'knop knop-primair knop-breed' }, ico('papier', 20), 'PDF openen'));
+    if (gesloten) return;
+    url = URL.createObjectURL(blob);
+    download.href = url; download.download = meta.naam || 'document.pdf'; download.hidden = false;
+    bytes = new Uint8Array(await blob.arrayBuffer());
   } catch (e) {
     status.textContent = navigator.onLine ? `Laden lukte niet: ${e.message || e}` : 'Deze PDF staat nog niet offline op dit apparaat. Open hem een keer met internet.';
+    return;
   }
+
+  try {
+    const lib = await laadPdfjs();
+    taak = lib.getDocument({
+      data: bytes, isEvalSupported: false,
+      standardFontDataUrl: new URL('./lib/pdfjs/standard_fonts/', document.baseURI).href
+    });
+    docPdf = await taak.promise;
+  } catch (e) {
+    if (gesloten) return;
+    vervang(status, 'Deze PDF kan hier niet getoond worden. ',
+      el('a', { href: url, download: meta.naam || 'document.pdf' }, 'Download hem'), ' en open hem met een andere app.');
+    return;
+  }
+  if (gesloten) return;
+  status.remove();
+
+  const n = docPdf.numPages;
+  const eerste = await docPdf.getPage(1);
+  const basis = eerste.getViewport({ scale: 1 });
+  const verhouding = basis.height / basis.width;
+  let zoom = 1;
+  const ZOOMS = [1, 1.5, 2, 3];
+  const paginas = [];
+  for (let i = 1; i <= n; i++) {
+    const p = el('div', { class: 'pdf-pagina', 'data-nr': String(i), 'aria-label': `Bladzijde ${i}` });
+    p.style.aspectRatio = `1 / ${verhouding}`;
+    paginas.push({ el: p, getekend: 0, bezig: false });
+    blad.append(p);
+  }
+  pagInfo.textContent = `blz. 1 / ${n}`;
+
+  const breedte = () => Math.max(200, scroller.clientWidth - 16) * zoom;
+  async function teken(idx) {
+    const pg = paginas[idx];
+    if (pg.bezig || pg.getekend === zoom || gesloten) return;
+    pg.bezig = true;
+    try {
+      const page = idx === 0 ? eerste : await docPdf.getPage(idx + 1);
+      const vp1 = page.getViewport({ scale: 1 });
+      pg.el.style.aspectRatio = `${vp1.width} / ${vp1.height}`;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const css = breedte();
+      const vp = page.getViewport({ scale: (css / vp1.width) * dpr });
+      const doek = document.createElement('canvas');
+      doek.width = Math.floor(vp.width); doek.height = Math.floor(vp.height);
+      await page.render({ canvas: doek, canvasContext: doek.getContext('2d'), viewport: vp }).promise;
+      if (gesloten) return;
+      pg.el.replaceChildren(doek);
+      pg.getekend = zoom;
+    } catch { /* volgende keer opnieuw proberen */ } finally { pg.bezig = false; }
+  }
+  const zichtbaar = new Set();
+  waarnemer = new IntersectionObserver((ents) => {
+    ents.forEach((en) => {
+      const idx = Number(en.target.dataset.nr) - 1;
+      if (en.isIntersecting) { zichtbaar.add(idx); teken(idx); } else zichtbaar.delete(idx);
+    });
+  }, { root: scroller, rootMargin: '800px 0px' });
+  paginas.forEach((p) => waarnemer.observe(p.el));
+
+  scroller.addEventListener('scroll', () => {
+    const midden = scroller.scrollTop + scroller.clientHeight / 3;
+    let nr = 1;
+    for (const p of paginas) { if (p.el.offsetTop <= midden) nr = Number(p.el.dataset.nr); else break; }
+    pagInfo.textContent = `blz. ${nr} / ${n}`;
+  }, { passive: true });
+
+  function zetZoom(z) {
+    const oud = zoom;
+    zoom = Math.min(3, Math.max(1, z));
+    if (zoom === oud) return;
+    const relY = scroller.scrollTop / Math.max(1, scroller.scrollHeight);
+    blad.style.width = `${breedte()}px`;
+    scroller.scrollTop = relY * scroller.scrollHeight;
+    zoomUit.disabled = zoom <= 1; zoomIn.disabled = zoom >= 3;
+    zichtbaar.forEach(teken);
+  }
+  zoomIn.disabled = false;
+  zoomIn.addEventListener('click', () => zetZoom(ZOOMS.find((z) => z > zoom + 0.01) || 3));
+  zoomUit.addEventListener('click', () => zetZoom([...ZOOMS].reverse().find((z) => z < zoom - 0.01) || 1));
+  blad.style.width = `${breedte()}px`;
+
+  // Knijpen met twee vingers: tijdens het knijpen alleen vergroten (snel), daarna scherp opnieuw tekenen.
+  let knijpStart = 0;
+  const afstand = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  scroller.addEventListener('touchstart', (e) => { if (e.touches.length === 2) knijpStart = afstand(e.touches); }, { passive: true });
+  scroller.addEventListener('touchmove', (e) => {
+    if (knijpStart && e.touches.length === 2) {
+      e.preventDefault();
+      const f = Math.min(3 / zoom, Math.max(1 / zoom, afstand(e.touches) / knijpStart));
+      blad.style.transformOrigin = 'top left';
+      blad.style.transform = `scale(${f})`;
+    }
+  }, { passive: false });
+  scroller.addEventListener('touchend', (e) => {
+    if (!knijpStart || e.touches.length) return;
+    const m = /scale\(([\d.]+)\)/.exec(blad.style.transform);
+    const f = m ? Number(m[1]) : 1;
+    blad.style.transform = '';
+    knijpStart = 0;
+    zetZoom(Math.round(zoom * f * 4) / 4);
+  });
+  let resizeTimer = 0;
+  opResize = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (gesloten) return; blad.style.width = `${breedte()}px`; paginas.forEach((p) => { p.getekend = 0; }); zichtbaar.forEach(teken); }, 200);
+  };
+  window.addEventListener('resize', opResize);
 }
 
 function pdfTracker() {
@@ -860,22 +1016,30 @@ function viewStart() {
     inhoud);
 }
 
+function onderhoudBalk() {
+  // fix-9: geen lijst meer op het startscherm, alleen een samenvatting met een link naar Onderhoud
+  if (!D.onderhoud.length) return null;
+  const tel = { laat: 0, binnenkort: 0, nooit: 0 };
+  D.onderhoud.forEach((t) => { const s = taakStatus(t).soort; if (s in tel) tel[s]++; });
+  const delen = [
+    tel.laat ? `${tel.laat} te laat` : null,
+    tel.binnenkort ? `${tel.binnenkort} deze maand` : null,
+    tel.nooit ? `${tel.nooit} nog nooit gedaan` : null
+  ].filter(Boolean);
+  const tekst = delen.length ? delen.join(' · ') : 'alles bij';
+  return el('a', { href: '#/onderhoud', class: `onderhoudbalk${tel.laat ? ' onderhoudbalk-laat' : ''}` },
+    el('span', { class: 'onderhoudbalk-ico', 'aria-hidden': 'true' }, ico('moersleutel', 20)),
+    el('span', { class: 'onderhoudbalk-tekst' }, el('b', {}, 'Onderhoud: '), tekst, delen.length ? null : ' ', delen.length ? null : ico('vink', 16)),
+    ico('rechts', 18));
+}
+
 function startSecties() {
-  const taken = D.onderhoud.map((t) => ({ t, s: taakStatus(t) }))
-    .filter(({ s }) => s.soort !== 'later')
-    .sort((a, b) => a.s.dagen - b.s.dagen)
-    .slice(0, 3);
   const ruimtes = gesorteerdeRuimtes();
   return [
+    onderhoudBalk(),
     el('a', { href: '#/nood', class: 'noodknop' },
       el('span', { class: 'noodknop-ico' }, ico('let_op', 24)),
       el('span', { class: 'noodknop-tekst' }, el('b', {}, 'Gaat er iets mis?'), el('span', {}, 'Noodkaart: kranen, stroom, wie bel je'))),
-    el('section', { class: 'stapel', 'aria-labelledby': 'kop-onderhoud' },
-      el('div', { class: 'rij-tussen' },
-        el('h2', { id: 'kop-onderhoud', class: 'kop-s' }, 'Onderhoud binnenkort'),
-        el('a', { href: '#/onderhoud', class: 'klein vet' }, 'Alles')),
-      taken.length ? el('ul', { class: 'lijst' }, taken.map(({ t, s }) => el('li', {}, taakRijKort(t, s))))
-        : el('p', { class: 'leeg' }, D.onderhoud.length ? 'Niets dat binnenkort moet. Mooi zo!' : 'Nog geen onderhoud ingevoerd. Dat doe je bij een apparaat.')),
     el('section', { class: 'stapel', 'aria-labelledby': 'kop-ruimtes' },
       el('div', { class: 'rij-tussen' },
         el('h2', { id: 'kop-ruimtes', class: 'kop-s' }, 'Ruimtes'),
@@ -1501,7 +1665,24 @@ function verwerkImport(data, uitvoeren, bijwerken = false) {
     throw new Error('Dit is geen importbestand van Onze Woning.');
   }
   const fotos = data.fotos && typeof data.fotos === 'object' ? data.fotos : {};
-  const tel = { ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, itemsBijgewerkt: 0, takenBijgewerkt: 0, taken: 0, papieren: 0, fotos: 0 };
+  const pdfs = data.pdfs && typeof data.pdfs === 'object' ? data.pdfs : {};
+  const tel = { ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, itemsBijgewerkt: 0, takenBijgewerkt: 0, taken: 0, papieren: 0, fotos: 0, pdfs: 0, pdfBytes: 0, pdfTaken: [] };
+  // fix-9: PDF uit het importbestand (alleen geldige PDF's tot 20 MB)
+  const pdfGeldig = (ref) => {
+    if (!ref || !Object.prototype.hasOwnProperty.call(pdfs, ref)) return null;
+    const b = pdfs[ref];
+    if (typeof b !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(b)) return null;
+    const grootte = Math.floor(b.length * 3 / 4) - (b.endsWith('==') ? 2 : b.endsWith('=') ? 1 : 0);
+    if (grootte > PDF_MAX) return null;
+    try { if (atob(b.slice(0, 8)).slice(0, 5) !== '%PDF-') return null; } catch { return null; }
+    return { b, grootte };
+  };
+  const pdfErbij = (ref, papierId, naam) => {
+    const g = pdfGeldig(ref);
+    if (!g) return;
+    tel.pdfs++; tel.pdfBytes += g.grootte;
+    if (uitvoeren) tel.pdfTaken.push({ papierId, b64: g.b, naam });
+  };
   const teWissenFotos = [];
   const fotoIds = new Map();
   const foto = (ref) => {
@@ -1615,20 +1796,30 @@ function verwerkImport(data, uitvoeren, bijwerken = false) {
           });
         }
       });
-      const papierNamen = bestaand ? D.papieren.filter((p) => p.itemId === bestaand.id).map((p) => norm(p.titel)) : [];
+      const bestaandePapieren = bestaand ? D.papieren.filter((p) => p.itemId === bestaand.id) : [];
+      const papierNamen = bestaandePapieren.map((p) => norm(p.titel));
       (Array.isArray(it.papieren) ? it.papieren : []).slice(0, 30).forEach((p) => {
         const titel = importTekst(p && p.titel, 120);
-        if (!titel || papierNamen.includes(norm(titel))) return;
+        if (!titel) return;
+        const pdfNaam = `${titel.replace(/[\\/:*?"<>|]/g, '').slice(0, 100)}.pdf`;
+        if (papierNamen.includes(norm(titel))) {
+          // fix-9: bestaand papier zonder PDF krijgt de PDF uit het bestand; een eigen PDF blijft altijd staan
+          const oudP = bestaandePapieren.find((x) => norm(x.titel) === norm(titel));
+          if (oudP && !(oudP.bestand && oudP.bestand.id) && p.pdf) pdfErbij(p.pdf, oudP.id, pdfNaam);
+          return;
+        }
         papierNamen.push(norm(titel));
         tel.papieren++;
         const fotoId = foto(p.foto);
+        let pid = null;
         if (uitvoeren) {
-          opslag.add('papieren', {
+          pid = opslag.add('papieren', {
             itemId: iid, soort: PAPIER_SOORTEN.includes(p.soort) ? p.soort : 'Overig', titel,
             datum: importDatum(p.datum), bedrag: importTekst(p.bedrag, 20), link: veiligeLink(p.link) || '',
             fotoId: fotoId || null, notitie: importTekst(p.notitie, 1000)
           });
         }
+        if (p.pdf) pdfErbij(p.pdf, pid, pdfNaam);
       });
     });
   });
@@ -1646,8 +1837,26 @@ function importSamenvatting(t) {
     w(t.taken, 'onderhoudstaak', 'onderhoudstaken'),
     w(t.takenBijgewerkt, 'bestaande onderhoudstaak bijgewerkt', 'bestaande onderhoudstaken bijgewerkt'),
     w(t.papieren, 'papier', 'papieren'),
-    w(t.fotos, 'foto', "foto's")
+    w(t.fotos, 'foto', "foto's"),
+    t.pdfs ? `${aantalPdf(t.pdfs)} (${fmtMB(t.pdfBytes)})` : null
   ].filter(Boolean);
+}
+
+// fix-9: PDF's uit het importbestand één voor één opslaan, met voortgang
+async function importPdfs(taken) {
+  let fout = 0;
+  for (let i = 0; i < taken.length; i++) {
+    const t = taken[i];
+    try {
+      melding(`PDF ${i + 1} van ${taken.length} opslaan… (niet afsluiten)`);
+      const bytes = vanB64(t.b64);
+      const meta = await opslag.bestandOpslaan(t.naam, bytes, () => {});
+      opslag.update('papieren', t.papierId, { bestand: meta });
+      const c = await pdfCache();
+      if (c) { try { await c.put(pdfSleutel(meta.id), new Response(new Blob([bytes], { type: 'application/pdf' }), { headers: { 'Content-Type': 'application/pdf' } })); } catch { /* vol */ } }
+    } catch { fout++; }
+  }
+  return fout;
 }
 
 function importeren() {
@@ -1657,7 +1866,7 @@ function importeren() {
     const f = invoer.files && invoer.files[0];
     invoer.remove();
     if (!f) return;
-    if (f.size > 20 * 1024 * 1024) { melding('Dit bestand is te groot.', true); return; }
+    if (f.size > 120 * 1024 * 1024) { melding('Dit bestand is te groot.', true); return; } // fix-9: ruimer, PDF's kunnen erin zitten
     let data;
     try { data = JSON.parse(await f.text()); } catch { melding('Dit is geen geldig importbestand.', true); return; }
     let gewoon, bij;
@@ -1687,8 +1896,13 @@ function importeren() {
       opslaanLabel: 'Importeren',
       opslaan: (importSamenvatting(gewoon).length || kanBijwerken) ? () => {
         if (!importSamenvatting(bijwerken ? bij : gewoon).length) { melding('Vink "bijwerken" aan of kies Annuleren.', true); return false; }
+        const gekozen = bijwerken ? bij : gewoon;
+        if (gekozen.pdfs && opslag.soort === 'cloud' && !navigator.onLine) { melding('Voor het importeren van PDF\'s heb je internet nodig.', true); return false; }
         const klaar = verwerkImport(data, true, bijwerken);
-        melding(`Geïmporteerd: ${importSamenvatting(klaar).join(', ')}`);
+        if (!klaar.pdfTaken.length) { melding(`Geïmporteerd: ${importSamenvatting(klaar).join(', ')}`); return; }
+        importPdfs(klaar.pdfTaken).then((fout) => {
+          melding(fout ? `Geïmporteerd, maar ${aantalPdf(fout)} lukte niet. Probeer het later opnieuw.` : `Geïmporteerd: ${importSamenvatting(klaar).join(', ')}`, !!fout);
+        });
       } : null
     });
   });
