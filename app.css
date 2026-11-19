@@ -1,4 +1,4 @@
-/* app.css — fix-9 */
+/* app.css — fix-10 */
 :root {
   --grond: #F7F5F0;
   --kaart: #FFFFFF;
@@ -278,3 +278,25 @@ body.pdf-open { overflow: hidden; }
 .pdf-pagina canvas { display: block; width: 100%; height: 100%; }
 .pdf-status { color: #fff; text-align: center; padding: 32px 16px; }
 .pdf-status a { color: #fff; }
+
+/* fix-10: help-, disclaimer- en privacypagina */
+body.hulp { margin: 0; background: var(--grond); color: var(--inkt); font-family: Figtree, system-ui, sans-serif; line-height: 1.55; }
+.hulp-kop, .hulp-inhoud, .hulp-voet { max-width: 720px; margin: 0 auto; padding: 0 18px; }
+.hulp-kop { padding-top: 20px; }
+.hulp-kop h1 { margin: 12px 0 2px; font-size: 30px; }
+.hulp-terug { color: var(--accent); font-weight: 600; text-decoration: none; }
+.hulp-nav { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0 4px; }
+.hulp-nav a { padding: 8px 14px; border-radius: 999px; background: var(--accent-licht); color: var(--accent-donker); font-weight: 600; text-decoration: none; }
+.hulp-inhoud section { background: var(--kaart); border: 1px solid var(--lijn); border-radius: var(--radius); padding: 4px 20px 16px; margin: 18px 0; scroll-margin-top: 12px; }
+.hulp-inhoud h2 { font-size: 22px; margin: 16px 0 6px; }
+.hulp-inhoud h3 { font-size: 17px; margin: 18px 0 4px; }
+.hulp-inhoud ul { padding-left: 20px; margin: 6px 0; }
+.hulp-inhoud li { margin: 4px 0; }
+.hulp-inhoud a { color: var(--accent); }
+.hulp-voet { padding: 8px 18px 40px; text-align: center; }
+.digidave { display: inline-flex; align-items: center; gap: 10px; padding: 10px 16px; border-radius: 999px; background: #0F1B2D; color: #fff; text-decoration: none; }
+.digidave img { display: block; }
+.app-links { display: flex; justify-content: center; gap: 14px; flex-wrap: wrap; margin-top: 8px; font-size: 14px; }
+.app-links a { color: var(--zacht); }
+.meer-voet { display: flex; align-items: center; justify-content: center; gap: 8px; margin-top: 6px; }
+.meer-voet img { width: 20px; height: 20px; }

@@ -1,4 +1,4 @@
-// app.js — fix-9 (PDF in de app tonen, onderhoudsbalk op startscherm, PDF's in importbestand)
+// app.js — fix-10 (help-, disclaimer- en privacypagina; digidave-logo)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,7 +7,7 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-9';
+const VERSIE = 'fix-10';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
 const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
 
@@ -837,7 +837,9 @@ function toonLogin() {
           }
         }, 'Wachtwoord vergeten'))
     ),
-    el('button', { type: 'button', class: 'knop knop-tekst', onclick: startDemo }, 'Bekijk eerst met voorbeeldgegevens')
+    el('button', { type: 'button', class: 'knop knop-tekst', onclick: startDemo }, 'Bekijk eerst met voorbeeldgegevens'),
+    el('nav', { class: 'app-links', 'aria-label': 'Over deze app' },
+      el('a', { href: 'help.html#help' }, 'Help'), el('a', { href: 'help.html#disclaimer' }, 'Disclaimer'), el('a', { href: 'help.html#privacy' }, 'Privacy'))
   ));
 }
 
@@ -1354,8 +1356,15 @@ function viewMeer() {
             }
           })
           : rij('uit', 'Uitloggen', async () => { await uitloggen(); location.reload(); }))),
+    el('section', { class: 'stapel' },
+      el('h2', { class: 'kop-xs' }, 'Over deze app'),
+      el('ul', { class: 'lijst' },
+        rij('info', 'Help', null, 'help.html#help'),
+        rij('let_op', 'Disclaimer', null, 'help.html#disclaimer'),
+        rij('schild', 'Privacy', null, 'help.html#privacy'))),
     el('p', { class: 'zacht klein' }, 'Gasten uitnodigen met een link en code komt in de volgende fase.'),
-    el('p', { class: 'versie' }, `Onze Woning · ${VERSIE}`));
+    el('a', { href: 'https://bruindav.github.io/DigidaveStore/', class: 'versie meer-voet' },
+      el('img', { src: 'digidave-logo.png', alt: '' }), `Onze Woning · ${VERSIE} · gemaakt door digidave`));
 }
 
 function nietGevonden() {
