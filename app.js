@@ -1,4 +1,4 @@
-// app.js — fix-10 (help-, disclaimer- en privacypagina; digidave-logo)
+// app.js — fix-11 (contactenlijst: vakmensen, leveranciers en instanties)
 // Onze Woning: huishandleiding met ruimtes, apparaten, uitleg, onderhoud, papieren en noodkaart.
 import {
   db, isConfigured, loginGoogle, loginEmail, registreerEmail, wachtwoordVergeten, uitloggen, bijInlogWijziging
@@ -7,9 +7,10 @@ import {
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, getDoc, serverTimestamp, writeBatch
 } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
 
-const VERSIE = 'fix-10';
+const VERSIE = 'fix-11';
 const COLLS = ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren'];
-const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null };
+const D = { ruimtes: [], items: [], onderhoud: [], historie: [], papieren: [], nood: null, contacten: [] };
+let contactenGeblokkeerd = false; // fix-11: database-regels nog niet bijgewerkt
 
 let opslag = null;      // cloud (Firestore) of demo (alleen dit apparaat)
 let gebruiker = null;
@@ -48,7 +49,9 @@ const ICONS = {
   rechts: '<path d="M9 5l7 7-7 7"/>',
   greep: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
   schuif: '<path d="M8 20V4M4 8l4-4 4 4M16 4v16M12 16l4 4 4-4"/>',
-  importeer: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>'
+  importeer: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>',
+  mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+  wereld: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'
 };
 function ico(naam, maat = 22) {
   const s = document.createElement('span');
@@ -580,6 +583,15 @@ function cloudOpslag() {
         D.nood = s.exists() ? s.data() : null;
         bijWijziging();
       }, meldFout);
+      // fix-11: contacten apart, zodat de app ook werkt als de database-regels nog niet zijn bijgewerkt
+      onSnapshot(collection(db, 'contacten'), (s) => {
+        contactenGeblokkeerd = false;
+        D.contacten = s.docs.map((d) => ({ id: d.id, ...d.data() }));
+        bijWijziging();
+      }, (err) => {
+        if (err && String(err.code || '').includes('permission-denied')) { contactenGeblokkeerd = true; bijWijziging(); }
+        else meldFout(err);
+      });
     },
     // Schrijven zonder te wachten: werkt ook offline, Firestore verstuurt later.
     add(c, data) {
@@ -639,6 +651,7 @@ function demoOpslag() {
   let st = null;
   try { st = JSON.parse(localStorage.getItem(DEMO_SLEUTEL)); } catch { st = null; }
   if (!st || !Array.isArray(st.items)) st = demoGegevens();
+  if (!Array.isArray(st.contacten)) st.contacten = []; // fix-11
   const fotos = new Map(Object.entries(st.fotos || {}));
   let bijWijziging = () => {};
   let fotoWaarschuwing = false;
@@ -654,6 +667,7 @@ function demoOpslag() {
   function sync() {
     COLLS.forEach((c) => { D[c] = st[c].map((x) => ({ ...x })); });
     D.nood = st.nood ? JSON.parse(JSON.stringify(st.nood)) : null;
+    D.contacten = st.contacten.map((x) => ({ ...x }));
     klaar = true;
     bewaar();
     bijWijziging();
@@ -746,6 +760,10 @@ function demoGegevens() {
       { id: 'p2', itemId: 'i4', soort: 'Factuur', titel: 'Factuur onderhoudsbeurt', datum: d(386), bedrag: '', link: '', fotoId: null, notitie: '' }
     ],
     nood: standaardNoodkaart(),
+    contacten: [
+      { id: 'c1', groep: 'vak', rol: 'Loodgieter', naam: 'Voorbeeld Loodgieters', telefoon: '030 123 45 67', email: '', website: '', notitie: 'Ook voor de cv-ketel', itemId: 'i4', voorGasten: true },
+      { id: 'c2', groep: 'vak', rol: 'Slotenmaker', naam: '', telefoon: '', email: '', website: '', notitie: '', itemId: null, voorGasten: true }
+    ],
     fotos: {}
   };
 }
@@ -907,13 +925,14 @@ function render() {
       case 'onderhoud': node = viewOnderhoud(); break;
       case 'papieren': node = viewAllePapieren(); break;
       case 'nood': node = viewNood(); break;
+      case 'contacten': node = viewContacten(); break;
       case 'meer': node = viewMeer(); break;
       default: node = viewStart();
     }
   }
   view.replaceChildren(node);
 
-  const sectie = ['onderhoud', 'papieren', 'meer'].includes(delen[0]) ? delen[0] : (delen[0] === 'nood' ? 'meer' : '');
+  const sectie = ['onderhoud', 'papieren', 'meer'].includes(delen[0]) ? delen[0] : (['nood', 'contacten'].includes(delen[0]) ? 'meer' : '');
   Object.entries(navLinks).forEach(([k, a]) => { if (k === sectie) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
 
   if (focus) {
@@ -1088,6 +1107,9 @@ function zoekResultaten(term) {
       hits.push({ soort: p.soort || 'Papier', titel: p.titel, sub: i ? i.naam : 'Algemeen', href: i ? `#/item/${i.id}/papieren` : '#/papieren' });
     }
   });
+  D.contacten.forEach((c) => {
+    if (past(c.rol, c.naam, c.notitie, c.telefoon, c.email)) hits.push({ soort: 'Contact', titel: [c.rol, c.naam].filter(Boolean).join(' · '), sub: c.telefoon || '', href: '#/contacten' });
+  });
   if (!hits.length) return el('p', { class: 'leeg' }, `Niets gevonden voor "${term.trim()}".`);
   return el('section', { class: 'stapel', 'aria-label': 'Zoekresultaten' },
     el('p', { class: 'zacht klein' }, `${hits.length} gevonden`),
@@ -1169,7 +1191,8 @@ function tabUitleg(i) {
         s.fotoId ? klikbareFoto(s.fotoId, `Stap ${n + 1}`, 'stapfoto') : null)))) : null,
     u.probleem ? el('div', { class: 'tipblok' }, ico('info'),
       el('div', {}, el('b', {}, 'Lukt het niet?'), el('p', {}, u.probleem))) : null,
-    el('button', { type: 'button', class: 'knop knop-rand knop-breed', onclick: () => uitlegBewerken(i) }, ico('potlood', 20), leeg ? 'Uitleg schrijven' : 'Uitleg bewerken')
+    el('button', { type: 'button', class: 'knop knop-rand knop-breed', onclick: () => uitlegBewerken(i) }, ico('potlood', 20), leeg ? 'Uitleg schrijven' : 'Uitleg bewerken'),
+    contactenBijItem(i)
   ];
 }
 
@@ -1326,7 +1349,138 @@ function viewNood() {
         const tel = telLink(c.telefoon);
         return tel ? el('a', { href: tel, class: 'kaart contact' }, el('b', {}, c.naam), el('span', {}, c.telefoon))
           : el('div', { class: 'kaart contact' }, el('b', {}, c.naam), el('span', { class: 'zacht' }, 'nummer invullen'));
-      })) : null));
+      })) : null,
+      el('a', { href: '#/contacten', class: 'kaart lijst-rij' }, ico('telefoon'),
+        el('span', { class: 'lijst-tekst' }, el('span', { class: 'lijst-titel' }, 'Meer contacten'), el('span', { class: 'lijst-sub' }, 'Vakmensen, leveranciers en instanties')), ico('rechts', 20))));
+}
+
+/* ---------- Contacten (fix-11) ----------
+   Vakmensen, leveranciers en instanties. De noodcontacten blijven op de noodkaart staan
+   en worden hier bovenaan getoond (alleen-lezen; bewerken via de noodkaart). */
+const CONTACT_GROEPEN = [['vak', 'Vakmensen'], ['lev', 'Leveranciers en installateurs'], ['inst', 'Instanties']];
+let contactZoek = '';
+
+function websiteLink(w) {
+  const v = String(w || '').trim();
+  if (!v) return null;
+  return veiligeLink(/^https?:\/\//i.test(v) ? v : `https://${v}`);
+}
+const geldigeMail = (m) => /^[^\s@<>"]+@[^\s@<>"]+\.[^\s@<>"]+$/.test(String(m || '').trim());
+const contactTitel = (c) => c.rol || c.naam || '(zonder naam)';
+
+function belKnop(telefoon, label) {
+  const tel = telLink(telefoon);
+  return tel ? el('a', { href: tel, class: 'belknop', 'aria-label': `${label} bellen` }, ico('telefoon', 20)) : null;
+}
+
+function contactKaart(c) {
+  const leeg = !c.telefoon && !c.naam && !c.email;
+  const sub = leeg ? 'nog invullen' : [c.naam && c.rol ? c.naam : null, c.notitie].filter(Boolean).join(' · ');
+  return el('li', { class: 'contact-rij' },
+    el('button', { type: 'button', class: `kaart lijst-rij${leeg ? ' contact-leeg' : ''}`, onclick: () => contactTonen(c) },
+      el('span', { class: 'lijst-tekst' },
+        el('span', { class: 'lijst-titel' }, contactTitel(c)),
+        sub ? el('span', { class: 'lijst-sub' }, sub) : null)),
+    belKnop(c.telefoon, contactTitel(c)));
+}
+
+function viewContacten() {
+  const t = norm(contactZoek.trim());
+  const past = (c) => !t || [c.rol, c.naam, c.notitie, c.telefoon, c.email, (itemVan(c.itemId) || {}).naam].some((x) => norm(x).includes(t));
+  const nood = ((D.nood && D.nood.contacten) || []).filter((c) => !t || norm(c.naam).includes(t) || norm(c.telefoon).includes(t));
+  const zoekId = 'contact-zoek';
+  const sorteer = (a, b) => String(contactTitel(a)).localeCompare(String(contactTitel(b)), 'nl');
+  const groepen = CONTACT_GROEPEN.map(([k, titel]) => [titel, D.contacten.filter((c) => (c.groep || 'vak') === k && past(c)).sort(sorteer)]);
+  const niets = !nood.length && groepen.every(([, l]) => !l.length);
+  return el('div', {},
+    terugbalk('#/meer', 'Meer', el('button', { type: 'button', class: 'icoonknop', 'aria-label': 'Contact toevoegen', onclick: () => contactBewerken(null) }, ico('plus'))),
+    el('div', { class: 'pagina' },
+      el('h1', { class: 'titel' }, 'Contacten'),
+      contactenGeblokkeerd ? el('div', { class: 'tipblok' }, ico('info'),
+        el('div', {}, el('b', {}, 'Nog niet beschikbaar'), el('p', {}, 'De beveiligingsregels van de database moeten nog worden bijgewerkt (firestore.rules, fix-11). Daarna verschijnen hier je contacten.'))) : null,
+      el('div', { class: 'zoek', role: 'search' }, el('label', { for: zoekId, class: 'sr' }, 'Zoek in contacten'), ico('zoek', 20),
+        el('input', { id: zoekId, type: 'search', placeholder: 'Zoek: loodgieter, Kalkhoven…', value: contactZoek, autocomplete: 'off', oninput: (e) => { contactZoek = e.target.value; render(); } })),
+      nood.length ? el('section', { class: 'stapel' },
+        el('div', { class: 'rij-tussen' }, el('h2', { class: 'kop-xs' }, 'Bij nood'), el('a', { href: '#/nood', class: 'klein' }, 'Noodkaart')),
+        el('ul', { class: 'lijst' }, nood.map((c) => el('li', { class: 'contact-rij' },
+          el('div', { class: 'kaart lijst-rij' }, el('span', { class: 'lijst-tekst' }, el('span', { class: 'lijst-titel' }, c.naam || 'Contact'), el('span', { class: 'lijst-sub' }, c.telefoon || 'nummer invullen'))),
+          belKnop(c.telefoon, c.naam || 'Contact'))))) : null,
+      groepen.map(([titel, lijst]) => lijst.length ? el('section', { class: 'stapel' }, el('h2', { class: 'kop-xs' }, titel), el('ul', { class: 'lijst' }, lijst.map(contactKaart))) : null),
+      niets ? el('p', { class: 'leeg' }, t ? `Niets gevonden voor "${contactZoek.trim()}".` : 'Zet hier de vakmensen en bedrijven die je nodig hebt, zoals de loodgieter of de elektricien.') : null,
+      el('button', { type: 'button', class: 'knop knop-primair knop-breed', onclick: () => contactBewerken(null) }, ico('plus', 20), 'Contact toevoegen')));
+}
+
+function contactTonen(c) {
+  const item = c.itemId ? itemVan(c.itemId) : null;
+  const tel = telLink(c.telefoon);
+  const web = websiteLink(c.website);
+  const mail = geldigeMail(c.email) ? `mailto:${c.email.trim()}` : null;
+  const groep = (CONTACT_GROEPEN.find(([k]) => k === (c.groep || 'vak')) || [])[1];
+  const regel = (icoon, inhoud) => el('div', { class: 'kaart kaart-p rij' }, ico(icoon, 20), inhoud);
+  dialoog({
+    titel: contactTitel(c),
+    bouw: (l) => vervang(l,
+      el('p', { class: 'zacht klein' }, [groep, c.voorGasten === false ? 'niet voor gasten' : 'zichtbaar voor gasten'].filter(Boolean).join(' · ')),
+      c.naam && c.rol ? el('p', { class: 'kop-xs' }, c.naam) : null,
+      c.telefoon ? regel('telefoon', tel ? el('a', { href: tel, class: 'vet' }, c.telefoon) : el('span', {}, c.telefoon)) : null,
+      c.email ? regel('mail', mail ? el('a', { href: mail }, c.email) : el('span', {}, c.email)) : null,
+      c.website ? regel('wereld', web ? el('a', { href: web, target: '_blank', rel: 'noopener noreferrer' }, c.website) : el('span', {}, c.website)) : null,
+      c.notitie ? el('p', { class: 'alinea' }, c.notitie) : null,
+      item ? el('a', { href: `#/item/${item.id}/uitleg`, class: 'kaart lijst-rij', onclick: () => { const d = document.querySelector('dialog.sheet'); if (d) d.close(); } },
+        el('span', { class: 'lijst-tekst' }, el('span', { class: 'lijst-titel' }, item.naam), el('span', { class: 'lijst-sub' }, `Hoort bij · ${ruimteNaam(item.ruimteId)}`)), ico('rechts', 20)) : null,
+      !c.telefoon && !c.email && !c.website ? el('p', { class: 'leeg' }, 'Nog geen gegevens. Tik op Bewerken om ze in te vullen.') : null),
+    opslaanLabel: 'Bewerken',
+    opslaan: () => { setTimeout(() => contactBewerken(c), 0); }
+  });
+}
+
+function contactBewerken(c) {
+  const groep = keuze(CONTACT_GROEPEN, c ? c.groep || 'vak' : 'vak');
+  const rol = tekstInvoer(c && c.rol, { required: true, placeholder: 'Bijv. Loodgieter', autocomplete: 'off' });
+  const naam = tekstInvoer(c && c.naam, { placeholder: 'Bijv. Eleveld Zeist', autocomplete: 'off' });
+  const telefoon = el('input', { class: 'invoer', type: 'tel', value: c ? c.telefoon || '' : '', placeholder: '030 123 45 67' });
+  const email = el('input', { class: 'invoer', type: 'email', value: c ? c.email || '' : '', placeholder: 'naam@bedrijf.nl', autocomplete: 'off' });
+  const website = el('input', { class: 'invoer', type: 'url', value: c ? c.website || '' : '', placeholder: 'www.bedrijf.nl', autocomplete: 'off' });
+  const notitie = tekstVak(c && c.notitie, { placeholder: 'Bijv. storingsdienst 24/7, doet ook het ketelonderhoud' });
+  const opties = [['', '— geen —'], ...[...D.items].sort((a, b) => `${ruimteNaam(a.ruimteId)} ${a.naam}`.localeCompare(`${ruimteNaam(b.ruimteId)} ${b.naam}`, 'nl'))
+    .map((i) => [i.id, `${ruimteNaam(i.ruimteId)} – ${i.naam}`])];
+  const onderdeel = keuze(opties, c && c.itemId ? c.itemId : '');
+  const gastId = nieuwId('gast');
+  const gast = el('input', { id: gastId, type: 'checkbox', checked: c ? c.voorGasten !== false : true });
+  dialoog({
+    titel: c ? 'Contact bewerken' : 'Nieuw contact',
+    bouw: (l) => l.append(
+      veld('Groep', groep), veld('Wat doet hij/zij?', rol), veld('Naam of bedrijf', naam),
+      veld('Telefoon', telefoon), veld('E-mail', email), veld('Website', website),
+      veld('Hoort bij onderdeel (mag)', onderdeel, 'Dan zie je dit contact ook bij dat onderdeel.'),
+      veld('Notitie', notitie),
+      el('label', { class: 'vinkje', for: gastId }, gast, 'Zichtbaar voor gasten')),
+    opslaan: () => {
+      const m = email.value.trim();
+      if (m && !geldigeMail(m)) { email.setAttribute('aria-invalid', 'true'); email.focus(); melding('Dit e-mailadres klopt niet.', true); return false; }
+      const w = website.value.trim();
+      if (w && !websiteLink(w)) { website.setAttribute('aria-invalid', 'true'); website.focus(); melding('Dit webadres klopt niet.', true); return false; }
+      const data = {
+        groep: groep.value, rol: rol.value.trim().slice(0, 80), naam: naam.value.trim().slice(0, 120),
+        telefoon: telefoon.value.trim().slice(0, 40), email: m.slice(0, 120), website: w.slice(0, 200),
+        notitie: notitie.value.trim().slice(0, 1000), itemId: onderdeel.value || null, voorGasten: gast.checked
+      };
+      if (c) opslag.update('contacten', c.id, data); else opslag.add('contacten', data);
+      melding(c ? 'Contact bewaard' : 'Contact toegevoegd');
+    },
+    verwijder: c ? async () => {
+      if (!await bevestig(`Contact "${contactTitel(c)}" verwijderen?`)) return false;
+      opslag.remove('contacten', c.id);
+    } : null
+  });
+}
+
+function contactenBijItem(i) {
+  const lijst = D.contacten.filter((c) => c.itemId === i.id);
+  if (!lijst.length) return null;
+  return el('section', { class: 'stapel' },
+    el('h2', { class: 'kop-xs' }, 'Wie bel je?'),
+    el('ul', { class: 'lijst' }, lijst.map(contactKaart)));
 }
 
 function viewMeer() {
@@ -1339,6 +1493,7 @@ function viewMeer() {
     el('ul', { class: 'lijst' },
       rij('let_op', 'Noodkaart bekijken', null, '#/nood'),
       rij('potlood', 'Noodkaart bewerken', noodBewerken),
+      rij('telefoon', 'Contacten', null, '#/contacten'),
       rij('plus', 'Ruimte toevoegen', () => ruimteBewerken(null)),
       rij('importeer', 'Gegevens importeren', importeren),
       rij('papier', 'Alle PDF\'s offline bewaren', allesOffline)),
@@ -1670,12 +1825,13 @@ function importTechniek(t) {
 }
 
 function verwerkImport(data, uitvoeren, bijwerken = false) {
-  if (!data || data.formaat !== 'onzewoning-import' || !Array.isArray(data.ruimtes)) {
+  if (!data || data.formaat !== 'onzewoning-import' || (!Array.isArray(data.ruimtes) && !Array.isArray(data.contacten))) {
     throw new Error('Dit is geen importbestand van Onze Woning.');
   }
   const fotos = data.fotos && typeof data.fotos === 'object' ? data.fotos : {};
   const pdfs = data.pdfs && typeof data.pdfs === 'object' ? data.pdfs : {};
-  const tel = { ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, itemsBijgewerkt: 0, takenBijgewerkt: 0, taken: 0, papieren: 0, fotos: 0, pdfs: 0, pdfBytes: 0, pdfTaken: [] };
+  const nieuweItems = new Map(); // fix-11: "ruimte|onderdeel" -> id, voor contacten in hetzelfde bestand
+  const tel = { contactenNieuw: 0, contactenBijgewerkt: 0, noodContacten: 0, ruimtesNieuw: 0, itemsNieuw: 0, itemsAangevuld: 0, itemsBijgewerkt: 0, takenBijgewerkt: 0, taken: 0, papieren: 0, fotos: 0, pdfs: 0, pdfBytes: 0, pdfTaken: [] };
   // fix-9: PDF uit het importbestand (alleen geldige PDF's tot 20 MB)
   const pdfGeldig = (ref) => {
     if (!ref || !Object.prototype.hasOwnProperty.call(pdfs, ref)) return null;
@@ -1711,7 +1867,7 @@ function verwerkImport(data, uitvoeren, bijwerken = false) {
     .filter((s) => s.tekst || s.fotoId);
 
   let ruimteVolg = volgendNummer(D.ruimtes);
-  data.ruimtes.slice(0, 50).forEach((r) => {
+  (Array.isArray(data.ruimtes) ? data.ruimtes : []).slice(0, 50).forEach((r) => {
     const rnaam = importTekst(r && r.naam, 80);
     if (!rnaam) return;
     const ruimte = D.ruimtes.find((x) => norm(x.naam) === norm(rnaam));
@@ -1736,6 +1892,7 @@ function verwerkImport(data, uitvoeren, bijwerken = false) {
           techniek: importTechniek(it.techniek)
         };
         if (uitvoeren) iid = opslag.add('items', nieuw);
+        nieuweItems.set(`${norm(rnaam)}|${norm(inaam)}`, iid);
       } else if (bijwerken) {
         // fix-7: bestaande uitleg/techniek vervangen door de versie uit het bestand (alleen als de tekst anders is)
         const patch = {};
@@ -1832,8 +1989,57 @@ function verwerkImport(data, uitvoeren, bijwerken = false) {
       });
     });
   });
+  importContacten(data.contacten, uitvoeren, bijwerken, tel, nieuweItems);
   if (uitvoeren) teWissenFotos.forEach((id) => { opslag.fotoVerwijderen(id); fotoCache.delete(id); });
   return tel;
+}
+
+// fix-11: contacten uit het importbestand. Groep "nood" komt op de noodkaart, de rest in Contacten.
+// Herkend aan rol + naam; bij bijwerken worden gewijzigde gegevens overschreven, anders alleen lege velden aangevuld.
+function importContacten(lijst, uitvoeren, bijwerken, tel, nieuweItems) {
+  if (!Array.isArray(lijst)) return;
+  let nood = D.nood ? { blokken: [...(D.nood.blokken || [])], contacten: [...(D.nood.contacten || [])] } : null;
+  let noodAnders = false;
+  lijst.slice(0, 200).forEach((x) => {
+    if (!x || typeof x !== 'object') return;
+    const groep = ['nood', 'vak', 'lev', 'inst'].includes(x.groep) ? x.groep : 'vak';
+    const rol = importTekst(x.rol, 80);
+    const naam = importTekst(x.naam, 120);
+    const telefoon = importTekst(x.telefoon, 40);
+    if (!rol && !naam) return;
+    if (groep === 'nood') {
+      const label = naam || rol;
+      if (!nood) nood = { blokken: standaardNoodkaart().blokken, contacten: [] };
+      if (nood.contacten.some((c) => norm(c.naam) === norm(label))) return;
+      nood.contacten.push({ naam: label, telefoon });
+      tel.noodContacten++; noodAnders = true;
+      return;
+    }
+    let itemId = null;
+    const o = x.onderdeel && typeof x.onderdeel === 'object' ? x.onderdeel : null;
+    if (o) {
+      const rn = norm(importTekst(o.ruimte, 80)), inm = norm(importTekst(o.naam, 80));
+      const r = D.ruimtes.find((y) => norm(y.naam) === rn);
+      const it = r ? D.items.find((y) => y.ruimteId === r.id && norm(y.naam) === inm) : null;
+      itemId = it ? it.id : (nieuweItems.get(`${rn}|${inm}`) || null);
+    }
+    const m = importTekst(x.email, 120);
+    const data = {
+      groep, rol, naam, telefoon, email: geldigeMail(m) ? m : '',
+      website: websiteLink(x.website) ? importTekst(x.website, 200) : '', notitie: importTekst(x.notitie, 1000),
+      itemId, voorGasten: x.voorGasten !== false
+    };
+    const bestaand = D.contacten.find((c) => norm(c.rol) === norm(rol) && norm(c.naam) === norm(naam));
+    if (!bestaand) { tel.contactenNieuw++; if (uitvoeren) opslag.add('contacten', data); return; }
+    const patch = {};
+    ['telefoon', 'email', 'website', 'notitie'].forEach((k) => {
+      if (data[k] && data[k] !== (bestaand[k] || '') && (bijwerken || !bestaand[k])) patch[k] = data[k];
+    });
+    if (data.itemId && !bestaand.itemId) patch.itemId = data.itemId;
+    if (bijwerken && groep !== (bestaand.groep || 'vak')) patch.groep = groep;
+    if (Object.keys(patch).length) { tel.contactenBijgewerkt++; if (uitvoeren) opslag.update('contacten', bestaand.id, patch); }
+  });
+  if (noodAnders && uitvoeren) opslag.setNood(nood);
 }
 
 function importSamenvatting(t) {
@@ -1847,6 +2053,9 @@ function importSamenvatting(t) {
     w(t.takenBijgewerkt, 'bestaande onderhoudstaak bijgewerkt', 'bestaande onderhoudstaken bijgewerkt'),
     w(t.papieren, 'papier', 'papieren'),
     w(t.fotos, 'foto', "foto's"),
+    w(t.contactenNieuw, 'nieuw contact', 'nieuwe contacten'),
+    w(t.contactenBijgewerkt, 'bestaand contact bijgewerkt', 'bestaande contacten bijgewerkt'),
+    w(t.noodContacten, 'contact op de noodkaart', 'contacten op de noodkaart'),
     t.pdfs ? `${aantalPdf(t.pdfs)} (${fmtMB(t.pdfBytes)})` : null
   ].filter(Boolean);
 }
@@ -1880,7 +2089,7 @@ function importeren() {
     try { data = JSON.parse(await f.text()); } catch { melding('Dit is geen geldig importbestand.', true); return; }
     let gewoon, bij;
     try { gewoon = verwerkImport(data, false, false); bij = verwerkImport(data, false, true); } catch (e) { meldFout(e); return; }
-    const kanBijwerken = bij.itemsBijgewerkt > 0 || bij.takenBijgewerkt > 0;
+    const kanBijwerken = bij.itemsBijgewerkt > 0 || bij.takenBijgewerkt > 0 || bij.contactenBijgewerkt > gewoon.contactenBijgewerkt;
     // fix-8: staat er in het bestand een nieuwere uitleg, dan staat "bijwerken" standaard aan
     let bijwerken = kanBijwerken;
     const vakId = nieuwId('bij');

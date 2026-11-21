@@ -1,4 +1,4 @@
-/* app.css — fix-10 */
+/* app.css — fix-11 */
 :root {
   --grond: #F7F5F0;
   --kaart: #FFFFFF;
@@ -198,6 +198,14 @@ a.kaart:hover, button.kaart:hover { border-color: var(--lijn-sterk); background:
 .contact { display: flex; flex-direction: column; justify-content: center; min-height: 56px; padding: 8px 12px; }
 .contact b { font-size: 15px; }
 .contact span { font-size: 13px; color: var(--accent); }
+
+/* Contacten (fix-11) */
+.contact-rij { display: flex; align-items: center; gap: 8px; }
+.contact-rij > .kaart { flex: 1; min-width: 0; text-align: left; }
+.contact-rij .lijst-sub { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.contact-leeg .lijst-titel, .contact-leeg .lijst-sub { color: var(--zacht); }
+.belknop { flex: none; display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; background: var(--accent-licht); color: var(--accent); }
+.belknop:hover { background: var(--accent); color: #fff; }
 
 /* Onder-navigatie */
 .onder-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; background: var(--kaart); border-top: 1px solid var(--lijn); padding: 8px 8px calc(10px + var(--veilig-onder)); }

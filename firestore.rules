@@ -1,4 +1,4 @@
-// firestore.rules — fix-6 (PDF's: bestanden + bestanddelen)
+// firestore.rules — fix-11 (contacten erbij; fix-6: PDF's in bestanden + bestanddelen)
 // Alleen "leden" (jij en je partner) mogen lezen en schrijven.
 // Een lid voeg je toe in de Firebase-console: collectie "leden", document-ID = de gebruikers-ID
 // die de app toont na de eerste keer inloggen. Inhoud mag bijv. { naam: "Dave" } zijn.
@@ -44,7 +44,7 @@ service cloud.firestore {
     // De gegevens van het huis
     match /{coll}/{id} {
       allow read, write: if isLid()
-        && coll in ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren', 'instellingen'];
+        && coll in ['ruimtes', 'items', 'onderhoud', 'historie', 'papieren', 'instellingen', 'contacten'];
     }
 
     // Alles daarbuiten: dicht

@@ -1,7 +1,7 @@
-// sw.js — fix-10
+// sw.js — fix-11
 // Zorgt dat de app ook zonder internet opent. Eigen bestanden: eerst netwerk (altijd de nieuwste versie),
 // bij geen verbinding uit de cache. Firebase-bibliotheken: uit de cache (veranderen niet per versie).
-const CACHE = 'onzewoning-fix-10';
+const CACHE = 'onzewoning-fix-11';
 const SCHIL = ['./', './index.html', './app.css', './app.js', './firebase.js', './config.js', './manifest.webmanifest', './icon.svg', './icon-192.png', './help.html', './digidave-logo.png', './lib/pdfjs/pdf.min.mjs', './lib/pdfjs/pdf.worker.min.mjs'];
 
 self.addEventListener('install', (e) => {
